@@ -95,14 +95,32 @@ class LiteRTLMEngine(private val context: Context) {
      /**
       * Generates a reply from a text prompt. Streams tokens as they arrive.
       */
-     fun generate(prompt: String): Flow<String> = generate(listOf(Content.Text(prompt)))
+     fun generate(prompt: String, template: PromptTemplate = PromptTemplate.Auto): Flow<String> {
+         val wrapped = PromptTemplates.wrap(prompt, template, currentSystemPrompt)
+         return generateInternal(listOf(Content.Text(wrapped)))
+     }
 
      /**
       * Generates a reply from multimodal content (text + optional images).
       * Creates a new conversation for each turn with cleaned history (reasoning stripped)
       * to prevent template mismatch errors, while preserving full responses in the UI.
       */
-     fun generate(content: List<Content>): Flow<String> = flow {
+     fun generate(content: List<Content>, template: PromptTemplate = PromptTemplate.Auto): Flow<String> {
+         val wrappedContent = if (template == PromptTemplate.Auto) {
+             content
+         } else {
+             content.map { c ->
+                 if (c is Content.Text) {
+                     Content.Text(PromptTemplates.wrap(c.text, template, currentSystemPrompt))
+                 } else {
+                     c
+                 }
+             }
+         }
+         return generateInternal(wrappedContent)
+     }
+
+     private fun generateInternal(content: List<Content>): Flow<String> = flow {
          val engineRef = withContext(Dispatchers.IO) {
              mutex.withLock { engine }
          }

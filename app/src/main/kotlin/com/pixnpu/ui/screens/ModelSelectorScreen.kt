@@ -229,11 +229,9 @@ private fun ModelCard(
             }
         },
         modifier = Modifier.fillMaxWidth(),
-    ) {
-        if (loadStatus == ModelLoadStatus.Loading) {
-            ShimmerOverlay()
-        }
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+         ) {
+        Box {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = model.name,
@@ -285,8 +283,12 @@ private fun ModelCard(
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             }
+            }
+        if (loadStatus == ModelLoadStatus.Loading) {
+            ShimmerOverlay()
         }
     }
+}
 }
 
 @Composable

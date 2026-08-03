@@ -221,7 +221,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
-                engine.generate(contentList).collect { chunk ->
+                engine.generate(contentList, _template.value).collect { chunk ->
                     if (chunk.isNotEmpty()) {
                         _messages.update { list ->
                             val lastIndex = list.size - 1
@@ -266,10 +266,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val tempImageFiles = mutableListOf<File>()
+
     private fun resolveImagePath(uri: Uri): String? {
         val context = getApplication<Application>()
         return try {
             val tempFile = File(context.cacheDir, "img_${System.nanoTime()}.jpg")
+            tempImageFiles.add(tempFile)
             context.contentResolver.openInputStream(uri)?.use { input ->
                 tempFile.outputStream().use { out -> input.copyTo(out) }
             }
@@ -278,6 +281,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             android.util.Log.e("MainViewModel", "Failed to resolve image path", e)
             null
         }
+    }
+
+    private fun cleanupTempImages() {
+        for (file in tempImageFiles) {
+            runCatching { if (file.exists()) file.delete() }
+        }
+        tempImageFiles.clear()
     }
 
     fun stop() {
@@ -300,6 +310,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        cleanupTempImages()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 engine.unload()

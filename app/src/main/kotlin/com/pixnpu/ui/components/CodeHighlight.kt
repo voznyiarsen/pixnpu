@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -103,18 +104,18 @@ fun StreamingText(
     caretVisible: Boolean = false,
     bodyStyle: TextStyle = MaterialTheme.typography.bodyLarge,
 ) {
-    val segments = scanSegments(text)
+    val segments = remember(text) { scanSegments(text) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        segments.forEach { segment ->
-            when (segment) {
+        segments.forEach { seg ->
+            when (seg) {
                 is Segment.Text -> HighlightedBody(
-                    text = if (caretVisible) "${segment.content}▌" else segment.content,
+                    text = if (caretVisible) "${seg.content}▌" else seg.content,
                     style = bodyStyle,
                 )
                 is Segment.Code -> CodeBlock(
-                    lang = segment.lang,
-                    content = segment.content,
+                    lang = seg.lang,
+                    content = seg.content,
                     maxHeight = maxCodeHeight,
                 )
             }

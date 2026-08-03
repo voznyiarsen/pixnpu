@@ -168,52 +168,47 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
         },
     ) { innerPadding ->
         Column(
-            Modifier.fillMaxSize()
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
         ) {
-            Column(
-                Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(innerPadding)
-            ) {
-                RuntimeStatusBar(
-                    metrics = metrics,
-                    params = params,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                )
-                Box(Modifier.weight(1f)) {
-                    Crossfade(targetState = tab, label = "tab-transition") { currentTab ->
-                        when (currentTab) {
-                            Screen.CHAT -> InferenceScreen(
-                                messages = messages,
-                                isGenerating = isGenerating,
-                                isLoadingModel = isLoadingModel != null,
-                                selectedModel = selectedModel?.name,
-                                engineMessage = engineMessage,
-                                pendingImageUri = pendingImageUri,
-                                onSend = vm::send,
-                                onStop = vm::stop,
-                                onPickImage = {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
-                                onClearImage = { vm.setPendingImage(null) },
-                            )
-                             Screen.MODELS -> ModelSelectorScreen(
-                                 models = models,
-                                 downloadState = downloadState,
-                                 selectedPath = selectedModel?.absolutePath,
-                                 modelLoadStatus = modelLoadStatus,
-                                 onLoad = vm::loadModel,
-                                 onVerify = vm::verifyModel,
-                                 onDelete = vm::deleteModel,
-                                 onDownload = vm::downloadModel,
-                                 onImport = vm::importModel,
-                                 onPause = vm::pauseDownload,
-                                 onCancelDownload = vm::cancelDownload,
-                             )
-                        }
+            RuntimeStatusBar(
+                metrics = metrics,
+                params = params,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+            Box(Modifier.weight(1f)) {
+                Crossfade(targetState = tab, label = "tab-transition") { currentTab ->
+                    when (currentTab) {
+                        Screen.CHAT -> InferenceScreen(
+                            messages = messages,
+                            isGenerating = isGenerating,
+                            isLoadingModel = isLoadingModel != null,
+                            selectedModel = selectedModel?.name,
+                            engineMessage = engineMessage,
+                            pendingImageUri = pendingImageUri,
+                            onSend = vm::send,
+                            onStop = vm::stop,
+                            onPickImage = {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            onClearImage = { vm.setPendingImage(null) },
+                        )
+                        Screen.MODELS -> ModelSelectorScreen(
+                            models = models,
+                            downloadState = downloadState,
+                            selectedPath = selectedModel?.absolutePath,
+                            modelLoadStatus = emptyMap(),
+                            onLoad = vm::loadModel,
+                            onVerify = vm::verifyModel,
+                            onDelete = vm::deleteModel,
+                            onDownload = vm::downloadModel,
+                            onImport = vm::importModel,
+                            onPause = vm::pauseDownload,
+                            onCancelDownload = vm::cancelDownload,
+                        )
                     }
                 }
             }

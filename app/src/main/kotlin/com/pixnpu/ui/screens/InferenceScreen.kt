@@ -58,6 +58,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -188,8 +193,12 @@ private fun ModelLoadedPrompt() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(message: ChatMessage) {
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
     when (message.role) {
         ChatRole.USER -> {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -198,7 +207,16 @@ private fun MessageBubble(message: ChatMessage) {
                     color = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier.widthIn(max = 320.dp),
                 ) {
-                    Column {
+                    Column(
+                        modifier = Modifier
+                            .combinedClickable(
+                                onClick = {},
+                                onLongClick = {
+                                    clipboardManager.setText(AnnotatedString(message.text))
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                }
+                            )
+                    ) {
                         message.imageUri?.let { uri ->
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalContext.current)
@@ -226,13 +244,25 @@ private fun MessageBubble(message: ChatMessage) {
             }
         }
         ChatRole.ASSISTANT -> {
-            StreamingText(
-                text = message.text,
-                caretVisible = message.streaming,
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            )
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            clipboardManager.setText(AnnotatedString(message.text))
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        }
+                    )
+            ) {
+                StreamingText(
+                    text = message.text,
+                    caretVisible = message.streaming,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
         }
     }
 }
