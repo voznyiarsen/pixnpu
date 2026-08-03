@@ -1,6 +1,12 @@
 package com.pixnpu.ui.screens
 
 import android.net.Uri
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +36,7 @@ import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -46,6 +53,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -81,17 +90,11 @@ fun InferenceScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (isLoadingModel) {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-            )
-        }
-
         Box(modifier = Modifier.weight(1f)) {
             if (messages.isEmpty() && selectedModel == null) {
                 EmptyPrompt()
+            } else if (messages.isEmpty()) {
+                ModelLoadedPrompt()
             } else {
                 LazyColumn(
                     state = listState,
@@ -134,7 +137,7 @@ fun InferenceScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp),
         )
     }
 }
@@ -155,7 +158,30 @@ private fun EmptyPrompt() {
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "Local LLM inference on Google Tensor NPU.\nPull a model, then start a conversation.",
+            text = "Local LLM Inference on Google Tensor NPU.\nPull a Model, then Start a Conversation.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ModelLoadedPrompt() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "Model Loaded",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "Ask a Question to Start the Conversation.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -227,7 +253,7 @@ private fun InputBar(
     Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(36.dp),
     ) {
         Column(modifier = Modifier.padding(6.dp)) {
             pendingImageUri?.let { uri ->
@@ -248,7 +274,7 @@ private fun InputBar(
                     )
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        text = "Image attached",
+                        text = "Image Attached",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -297,7 +323,7 @@ private fun InputBar(
                         ) {
                             if (value.isEmpty()) {
                                 Text(
-                                    "Ask anything",
+                                    "Ask Anything",
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodyLarge,
                                 )
@@ -310,6 +336,7 @@ private fun InputBar(
                 if (isGenerating) {
                     FilledIconButton(
                         onClick = onStop,
+                        shape = RoundedCornerShape(36.dp),
                         modifier = Modifier.size(56.dp),
                     ) {
                         Icon(
@@ -323,11 +350,36 @@ private fun InputBar(
                     FilledIconButton(
                         onClick = onSend,
                         enabled = canSend,
-                        modifier = Modifier.size(56.dp),
+                        shape = RoundedCornerShape(36.dp),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = Color.Unspecified,
+                        ),
+                        modifier = Modifier
+                            .size(56.dp)
+                            .background(
+                                brush = if (canSend) {
+                                    Brush.horizontalGradient(
+                                        listOf(
+                                            MaterialTheme.colorScheme.primary,
+                                            MaterialTheme.colorScheme.tertiary,
+                                        ),
+                                    )
+                                } else {
+                                    Brush.horizontalGradient(
+                                        listOf(
+                                            MaterialTheme.colorScheme.surfaceVariant,
+                                            MaterialTheme.colorScheme.surfaceVariant,
+                                        ),
+                                    )
+                                },
+                                shape = RoundedCornerShape(36.dp),
+                            ),
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Send,
                             contentDescription = "Send",
+                            tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(24.dp),
                         )
                     }

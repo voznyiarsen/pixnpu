@@ -1,5 +1,8 @@
 package com.pixnpu.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -46,15 +49,21 @@ fun ModelSelectorScreen(
     onVerify: (LocalModel) -> Unit,
     onDelete: (LocalModel) -> Unit,
     onDownload: (String, String?) -> Unit,
+    onImport: (Uri) -> Unit,
     onPause: () -> Unit,
     onCancelDownload: () -> Unit,
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<LocalModel?>(null) }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) onImport(uri)
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -62,8 +71,23 @@ fun ModelSelectorScreen(
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            Button(onClick = { showAddDialog = true }) {
-                Text("ADD")
+            Spacer(Modifier.weight(1f))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    onClick = { importLauncher.launch(arrayOf("*/*")) },
+                    shape = RoundedCornerShape(20.dp),
+                ) {
+                    Text("Import")
+                }
+                Button(
+                    onClick = { showAddDialog = true },
+                    shape = RoundedCornerShape(20.dp),
+                ) {
+                    Text("Add")
+                }
             }
         }
 
@@ -80,10 +104,10 @@ fun ModelSelectorScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("No models yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("No Models Yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Add a .litertlm URL, e.g. a Hugging Face resolve link",
+                    "Add a .litertlm URL or Import from Device",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -97,7 +121,7 @@ fun ModelSelectorScreen(
                         loading = model.name == loadingModelName,
                         onLoad = { onLoad(model) },
                         onVerify = { onVerify(model) },
-                        onDelete = { onDelete(model) },
+                        onDelete = { pendingDelete = model },
                     )
                 }
             }
@@ -110,6 +134,34 @@ fun ModelSelectorScreen(
             onConfirm = { url, sha ->
                 onDownload(url, sha.ifBlank { null })
                 showAddDialog = false
+            },
+        )
+    }
+
+    pendingDelete?.let { model ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete Model?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(model.name, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        Fmt.bytes(model.fileSizeBytes),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(model)
+                    pendingDelete = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
             },
         )
     }
@@ -161,7 +213,7 @@ private fun ModelCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    if (model.verified) "SHA-256 verified" else "SHA-256 unverified",
+                    if (model.verified) "SHA-256 Verified" else "SHA-256 Unverified",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (model.verified) {
                         MaterialTheme.colorScheme.primary
@@ -172,15 +224,16 @@ private fun ModelCard(
             }
             if (model.sha256 != null) {
                 Text(
-                    "sha256: ${Fmt.sha(model.sha256)}",
+                    "SHA-256: ${Fmt.sha(model.sha256)}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onLoad,
                     enabled = !selected && !loading,
+                    shape = RoundedCornerShape(20.dp),
                 ) {
                     if (loading) {
                         CircularProgressIndicator(
@@ -189,13 +242,19 @@ private fun ModelCard(
                             color = MaterialTheme.colorScheme.primary,
                         )
                     } else {
-                        Text("LOAD")
+                        Text("Load")
                     }
                 }
-                TextButton(onClick = onVerify) {
+                OutlinedButton(
+                    onClick = onVerify,
+                    shape = RoundedCornerShape(20.dp),
+                ) {
                     Text("Verify", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                TextButton(onClick = onDelete) {
+                OutlinedButton(
+                    onClick = onDelete,
+                    shape = RoundedCornerShape(20.dp),
+                ) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             }
@@ -211,10 +270,12 @@ private fun DownloadControl(
 ) {
     val fileName = when (download) {
         is DownloadState.Downloading -> download.fileName
-        is DownloadState.Verifying -> "${download.fileName} · verifying"
+        is DownloadState.Verifying -> "${download.fileName} · Verifying"
+        is DownloadState.Importing -> "${download.fileName} · Importing"
         else -> downloadStateLabel(download)
     }
     val isPaused = download is DownloadState.Paused
+    val isDownloading = download is DownloadState.Downloading
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -248,7 +309,7 @@ private fun DownloadControl(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                if (!isPaused) {
+                if (!isPaused && isDownloading) {
                     TextButton(onClick = onPause) { Text("Pause") }
                 }
                 TextButton(onClick = onCancel) { Text("Cancel", color = MaterialTheme.colorScheme.error) }
@@ -260,9 +321,10 @@ private fun DownloadControl(
 private fun downloadStateLabel(state: DownloadState): String = when (state) {
     is DownloadState.Downloading -> state.fileName
     is DownloadState.Verifying -> state.fileName
-    is DownloadState.Paused -> "${state.fileName} · paused"
+    is DownloadState.Paused -> "${state.fileName} · Paused"
     is DownloadState.Complete -> state.fileName
-    is DownloadState.Failed -> "${state.fileName} · failed"
+    is DownloadState.Failed -> "${state.fileName} · Failed"
+    is DownloadState.Importing -> "${state.fileName} · Importing"
     DownloadState.Idle -> ""
 }
 
@@ -270,12 +332,22 @@ private fun statusText(state: DownloadState): String = when (state) {
     is DownloadState.Downloading -> {
         val total = state.totalBytes
         val size = total?.let { Fmt.bytes(it) } ?: Fmt.bytes(state.bytesReceived)
-        "$size @ ${Fmt.speed(state.bytesPerSecond)}"
+        val speed = Fmt.speed(state.bytesPerSecond)
+        if (state.attempt > 1) {
+            "Retrying (${state.attempt}/${state.maxAttempts}) · $size @ $speed"
+        } else {
+            "$size @ $speed"
+        }
     }
-    is DownloadState.Verifying -> "sha-256 ${Fmt.bytes(state.totalBytes)}"
-    is DownloadState.Paused -> "Paused — resume by pressing Start again"
-    is DownloadState.Complete -> "Done ✓ moved to models"
+    is DownloadState.Verifying -> "SHA-256 ${Fmt.bytes(state.totalBytes)}"
+    is DownloadState.Paused -> "Paused — Resume by Pressing Start Again"
+    is DownloadState.Complete -> "Done ✓ Moved to Models"
     is DownloadState.Failed -> state.message
+    is DownloadState.Importing -> {
+        val total = state.totalBytes
+        val size = total?.let { Fmt.bytes(it) } ?: Fmt.bytes(state.bytesRead)
+        "Copying from Device · SHA-256 $size"
+    }
     DownloadState.Idle -> ""
 }
 
@@ -288,7 +360,7 @@ private fun AddModelDialog(
     var sha by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add .litertlm model") },
+        title = { Text("Add .litertlm Model") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -301,7 +373,7 @@ private fun AddModelDialog(
                 OutlinedTextField(
                     value = sha,
                     onValueChange = { sha = it },
-                    label = { Text("Expected SHA-256 (optional)") },
+                    label = { Text("Expected SHA-256 (Optional)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

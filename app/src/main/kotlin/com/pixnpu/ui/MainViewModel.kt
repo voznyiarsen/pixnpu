@@ -2,6 +2,7 @@ package com.pixnpu.ui
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.ai.edge.litertlm.Content
@@ -12,8 +13,10 @@ import com.pixnpu.engine.PromptTemplates
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelManager
+import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -96,14 +99,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun downloadModel(url: String, expectedSha256: String?) {
+        Log.d("MainViewModel", "Download requested: $url")
         manager.startDownload(url, expectedSha256)
+    }
+
+    fun importModel(uri: Uri) {
+        Log.d("MainViewModel", "Import requested: $uri")
+        manager.importModel(uri)
     }
 
     fun pauseDownload() = manager.pause()
 
-    fun cancelDownload() = manager.cancel()
+    fun cancelDownload() {
+        Log.d("MainViewModel", "Cancel requested")
+        manager.cancel()
+    }
 
     fun loadModel(model: LocalModel) {
+        Log.d("MainViewModel", "Loading model: ${model.name}")
         viewModelScope.launch {
             _engineMessage.value = null
             _isLoadingModel.value = model.name
@@ -111,11 +124,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.IO) {
                     if (engine.isLoaded) engine.unload()
                     engine.load(model.absolutePath, _params.value)
+                    engine.clearHistory()
                 }
                 _selectedModel.value = model
-            } catch (t: Throwable) {
+                clearChat()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to load model: ${model.name}", e)
                 _selectedModel.value = null
-                _engineMessage.value = t.message ?: "Failed to load model"
+                _engineMessage.value = e.message ?: "Failed to load model"
             } finally {
                 _isLoadingModel.value = null
             }
@@ -139,12 +155,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun verifyModel(model: LocalModel) {
+     fun verifyModel(model: LocalModel) {
         viewModelScope.launch {
             try {
-                manager.verify(model)
-            } catch (t: Throwable) {
-                _engineMessage.value = t.message ?: "Verification failed"
+                withContext(Dispatchers.IO) {
+                    manager.verify(model, isCancelled = { manager.isCancelled() })
+                }
+            } catch (e: Exception) {
+                _engineMessage.value = e.message ?: "Verification failed"
             }
         }
     }
@@ -157,13 +175,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val prompt = text.trim()
         val imageUri = _pendingImageUri.value
         if (prompt.isEmpty() && imageUri == null) return
-        if (_isGenerating.value) return
+        if (_isGenerating.value) {
+            Log.w("MainViewModel", "send() called while generating, ignoring")
+            return
+        }
         if (!engine.isLoaded) {
             _engineMessage.value = "No model loaded. Select a model from Models tab."
             return
         }
 
-        val wrapped = PromptTemplates.wrap(prompt, _template.value, _systemPrompt.value)
+        Log.d("MainViewModel", "Sending prompt (${prompt.length} chars, image=${imageUri != null})")
         val userMessage = ChatMessage(
             id = messageId.incrementAndGet(),
             role = ChatRole.USER,
@@ -179,7 +200,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         generationJob = viewModelScope.launch {
             try {
                 val contentList = buildList {
-                    add(Content.Text(wrapped))
+                    add(Content.Text(prompt))
                     if (imageUri != null) {
                         val path = withContext(Dispatchers.IO) {
                             resolveImagePath(imageUri)
@@ -237,33 +258,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun resolveImagePath(uri: Uri): String? {
         val context = getApplication<Application>()
         return try {
-            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-            val tempFile = java.io.File(context.cacheDir, "img_${System.nanoTime()}.jpg")
-            tempFile.outputStream().use { out -> inputStream.copyTo(out) }
-            inputStream.close()
+            val tempFile = File(context.cacheDir, "img_${System.nanoTime()}.jpg")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                tempFile.outputStream().use { out -> input.copyTo(out) }
+            }
             tempFile.absolutePath
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.e("MainViewModel", "Failed to resolve image path", e)
             null
         }
     }
 
     fun stop() {
+        Log.d("MainViewModel", "Stopping generation")
         engine.cancel()
         generationJob?.cancel()
     }
 
     fun clearChat() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    engine.clearHistory()
+                } catch (e: Exception) {
+                    Log.w("MainViewModel", "Failed to clear engine history", e)
+                }
+            }
+        }
         _messages.value = emptyList()
     }
 
     override fun onCleared() {
-        try {
-            kotlinx.coroutines.runBlocking {
-                withContext(Dispatchers.IO) {
-                    engine.unload()
-                }
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                engine.unload()
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "Failed to unload engine on clear", e)
             }
-        } catch (_: Throwable) {
         }
         super.onCleared()
     }

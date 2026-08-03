@@ -5,7 +5,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -25,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.PromptTemplate
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,11 +53,13 @@ fun ParameterSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = "Generation params",
+                text = "Generation Params",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -63,7 +69,7 @@ fun ParameterSheet(
                 value = temperature,
                 range = 0.0f..2.0f,
                 steps = 39,
-                display = String.format(java.util.Locale.ROOT, "%.2f", temperature),
+                display = String.format(Locale.ROOT, "%.2f", temperature),
                 onValue = {
                     temperature = it
                     onChangeParams(params.copy(temperature = it))
@@ -85,7 +91,7 @@ fun ParameterSheet(
                 value = topP,
                 range = 0.0f..1.0f,
                 steps = 99,
-                display = String.format(java.util.Locale.ROOT, "%.2f", topP),
+                display = String.format(Locale.ROOT, "%.2f", topP),
                 onValue = {
                     topP = it
                     onChangeParams(params.copy(topP = it))
@@ -143,7 +149,7 @@ fun ParameterSheet(
                     system = it
                     onChangeSystemPrompt(it)
                 },
-                label = { Text("System prompt") },
+                label = { Text("System Prompt") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 20.dp),
@@ -153,7 +159,7 @@ fun ParameterSheet(
             )
 
             Text(
-                text = if (isGenerating) "⚠ Params apply at the start of the next prompt" else "Params apply on next prompt",
+                text = if (isGenerating) "⚠ Params Apply at the Start of the Next Prompt" else "Params Apply on Next Prompt",
                 style = MaterialTheme.typography.labelMedium,
                 color = if (isGenerating) {
                     MaterialTheme.colorScheme.tertiary

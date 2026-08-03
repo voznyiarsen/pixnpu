@@ -1,0 +1,120 @@
+# AGENTS.md — pixnpu
+
+## Project Overview
+
+`pixnpu` is an Android app (Kotlin + Jetpack Compose) that runs quantized LLMs
+(`.litertlm` files) fully on-device using [LiteRT-LM](https://ai.google.dev/edge/litert)
+on Google Tensor SoC accelerators (NPU, GPU, CPU fallback).
+
+Think "Gemini app, but 100% local."
+
+### Architecture
+
+```
+ui/                     Compose UI (InferenceScreen, ModelSelectorScreen, MainScreen)
+  components/           RuntimeStatusBar, CodeHighlight, ParameterSheet
+  theme/                Material You (Theme.kt — dynamic colors)
+engine/                 LiteRTLMEngine.kt  — native engine wrapper, NPU-first
+model/                  ModelManager.kt    — resumable segmented downloads + SAF import
+                        DownloadState.kt   — state machine for download/import
+util/                   Fmt.kt             — human-readable byte/sha/speed formatting
+```
+
+### Device target
+- Pixel 10 Pro (`56061FDCH008CK`) — Tensor G5, NPU with G5 compiler
+- 1080×2410 at 420 dpi; nav bar = 126 px; IME top ≈ y=1656
+
+### Toolchain
+
+| Item           | Version          |
+|----------------|------------------|
+| AGP            | 8.13.2           |
+| Kotlin         | 2.3.21           |
+| Compose BOM    | 2025.10.00       |
+| Material3      | 1.5.0-alpha14    |
+| compileSdk     | 36, minSdk 34    |
+| coroutines     | **1.9.0** ⚠     |
+| LiteRT-LM      | 0.15.0           |
+| OkHttp         | 4.12.0           |
+| Coil           | 2.7.0            |
+
+---
+
+## ⚠️ Critical: kotlinx-coroutines 1.9.0 ↔ LiteRT-LM 0.15.0 Incompatibility
+
+`sendMessageAsync` (the async streaming API) **crashes the process** on this build
+with an uncatchable `NoSuchMethodError`:
+
+```
+java.lang.NoSuchMethodError: No static method close$default(
+  Lkotlinx/coroutines/channels/SendChannel;Ljava/lang/Throwable;ILjava/lang/Object;)Z
+```
+
+**Root cause:** LiteRT-LM's JNI callback thread invokes
+`SendChannel.close$default`, a method whose binary signature changed between
+coroutines versions. The app ships coroutines 1.9.0 (pinned — see build config),
+but the LiteRT-LM native library was compiled against a different coroutines ABI.
+
+**Why try/catch doesn't help:** the error is thrown on a native JNI callback thread
+(`Thread-15`), not on the Kotlin coroutine that called `collect`. By the time the
+exception surfaces, the process is already being killed.
+
+**Workaround in code:** `LiteRTLMEngine.generate()` does **not** call
+`sendMessageAsync`. It uses the synchronous `conversation.sendMessage(contents)`
+on `Dispatchers.Default`, then emits the reply in word-sized chunks with an 8 ms
+delay to simulate token streaming for the UI.
+
+**Do NOT "fix" by bumping coroutines.** Version 1.9.0 is intentionally pinned.
+Bumping to 1.10+ may resolve the `SendChannel` ABI mismatch, but it has not been
+tested and may break other behavior. Document any change here if you do.
+
+---
+
+## Build commands
+
+```bash
+./gradlew :app:assembleDebug       # release-style: use assembleRelease
+./gradlew :app:lintDebug           # 0 errors required on CI
+./gradlew :app:connectedDebugAndroidTest
+```
+
+## Deploy + test
+
+```bash
+adb -s 56061FDCH008CK install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Useful on-device inspection
+
+```bash
+# List installed models
+adb -s 56061FDCH008CK shell run-as com.pixnpu ls -la files/models/
+
+# Push a model for import testing (from host file)
+adb -s 56061FDCH008CK push /tmp/test.litertlm /sdcard/Download/
+
+# Watch engine activity
+adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
+```
+
+## Known limitations
+
+1. **No true native streaming** — works around the coroutines ABI crash with a
+   simulated word-by-word emission (8 ms per chunk).
+2. **functiongemma-270m-G5.litertlm warmup fails on NPU** on Pixel 10 Pro (this
+   build) — `No dispatch library found in .../lib/arm64`. `gemma3-270m-it-q8`
+   works on NPU. See logcat line references in the design summary.
+3. **Single in-flight download/import** — `ModelManager` gates on one
+   `operationJob`; pause/cancel reset to Idle.
+4. **No segmented retry on NPU dispatch failure** — NPU registration is
+   all-or-nothing per model/backend.
+
+## Conventions
+
+- Use `MutableStateFlow`/`StateFlow` for all async state — never `LiveData`.
+- Engine calls (`load`/`unload`/`initializeBackend`) must run on `Dispatchers.IO`
+  (already wrapped in `withContext` in MainViewModel).
+- Never call native LiteRT-LM methods on the main thread.
+- `.litertlm` files must preserve raw bytes (`noCompress` is set in build.gradle.kts).
+- Compose: Material 3 expressive, `RoundedCornerShape(28.dp)` for input/composer,
+  `surfaceContainerHigh` for surfaces, dynamic color tokens only (no custom palette).

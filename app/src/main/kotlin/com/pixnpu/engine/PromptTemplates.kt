@@ -5,6 +5,9 @@ enum class PromptTemplate(val label: String) {
     ChatML("ChatML"),
     Gemma("Gemma"),
     Llama3("Llama-3"),
+    Qwen("Qwen"),
+    Mistral("Mistral"),
+    Phi3("Phi-3"),
 }
 
 object PromptTemplates {
@@ -37,6 +40,28 @@ object PromptTemplates {
             }
             append("<|start_header_id|>user<|end_header_id|>\n\n").append(raw).append("<|eot_id|>")
             append("<|start_header_id|>assistant<|end_header_id|>\n\n")
+        }
+        PromptTemplate.Qwen -> buildString {
+            if (systemPrompt.isNotBlank()) {
+                append("<|im_start|>system\n").append(systemPrompt).append("<|im_end|>\n")
+            }
+            append("<|im_start|>user\n").append(raw).append("<|im_end|>\n")
+            append("<|im_start|>assistant\n")
+        }
+        PromptTemplate.Mistral -> buildString {
+            if (systemPrompt.isNotBlank()) {
+                append("[INST] <<SYS>>\n").append(systemPrompt).append("\n<</SYS>>\n\n")
+            } else {
+                append("[INST] ")
+            }
+            append(raw).append(" [/INST] ")
+        }
+        PromptTemplate.Phi3 -> buildString {
+            if (systemPrompt.isNotBlank()) {
+                append("<|system|>\n").append(systemPrompt).append("<|end|>\n")
+            }
+            append("<|user|>").append(raw).append("<|end|>\n")
+            append("<|assistant|>")
         }
     }
 }
