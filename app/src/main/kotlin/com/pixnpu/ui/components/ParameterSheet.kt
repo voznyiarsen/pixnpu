@@ -22,12 +22,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.PromptTemplate
-import com.pixnpu.ui.theme.TerminalAccent
-import com.pixnpu.ui.theme.TerminalPrimary
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,9 +53,9 @@ fun ParameterSheet(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = "generation::params",
-                style = MaterialTheme.typography.labelMedium,
-                color = TerminalAccent,
+                text = "Generation params",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
             )
 
             ParamSlider(
@@ -121,10 +118,7 @@ fun ParameterSheet(
             Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
                 androidx.compose.foundation.layout.Box {
                     TextButton(onClick = { expanded = true }) {
-                        Text(
-                            text = "template: ${template.label}",
-                            fontFamily = FontFamily.Monospace,
-                        )
+                        Text(text = "Template: ${template.label}")
                     }
                     androidx.compose.material3.DropdownMenu(
                         expanded = expanded,
@@ -132,7 +126,7 @@ fun ParameterSheet(
                     ) {
                         PromptTemplate.entries.forEach { entry ->
                             DropdownMenuItem(
-                                text = { Text(entry.label, fontFamily = FontFamily.Monospace) },
+                                text = { Text(entry.label) },
                                 onClick = {
                                     onChangeTemplate(entry)
                                     expanded = false
@@ -149,7 +143,7 @@ fun ParameterSheet(
                     system = it
                     onChangeSystemPrompt(it)
                 },
-                label = { Text("system prompt") },
+                label = { Text("System prompt") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 20.dp),
@@ -159,9 +153,13 @@ fun ParameterSheet(
             )
 
             Text(
-                text = if (isGenerating) "⚠ params apply at the start of the next prompt" else "params apply on next prompt",
+                text = if (isGenerating) "⚠ Params apply at the start of the next prompt" else "Params apply on next prompt",
                 style = MaterialTheme.typography.labelMedium,
-                color = if (isGenerating) TerminalAccent else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (isGenerating) {
+                    MaterialTheme.colorScheme.tertiary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
         }
     }
@@ -182,7 +180,7 @@ private fun ParamSlider(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(text = label, style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
-            Text(text = display, style = MaterialTheme.typography.bodySmall.copy(color = TerminalPrimary))
+            Text(text = display, style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.primary))
         }
         Slider(
             value = value,

@@ -1,7 +1,6 @@
 package com.pixnpu.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,16 +30,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
 import com.pixnpu.model.progress
-import com.pixnpu.ui.theme.TerminalAccent
-import com.pixnpu.ui.theme.TerminalDanger
-import com.pixnpu.ui.theme.TerminalPrimary
-import com.pixnpu.ui.theme.TerminalText
-import com.pixnpu.ui.theme.TerminalTextDim
 import com.pixnpu.util.Fmt
 
 @Composable
@@ -65,11 +58,12 @@ fun ModelSelectorScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "local::models",
-                style = MaterialTheme.typography.titleMedium.copy(color = TerminalAccent),
+                text = "Models",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             Button(onClick = { showAddDialog = true }) {
-                Text("+ ADD", fontFamily = FontFamily.Monospace)
+                Text("ADD")
             }
         }
 
@@ -86,12 +80,12 @@ fun ModelSelectorScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("no models yet", color = TerminalTextDim)
+                Text("No models yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Add a .litertlm URL, e.g. a Hugging Face resolve link",
                     style = MaterialTheme.typography.bodySmall,
-                    color = TerminalTextDim,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         } else {
@@ -131,48 +125,56 @@ private fun ModelCard(
     onDelete: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(16.dp),
         color = if (selected) {
-            TerminalPrimary.copy(alpha = 0.14f)
+            MaterialTheme.colorScheme.secondaryContainer
         } else {
             MaterialTheme.colorScheme.surfaceVariant
         },
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = model.name,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
                 if (loading) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
-                        color = TerminalAccent,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 } else if (selected) {
-                    Text("● loaded", color = TerminalPrimary, style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        "Loaded",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
                     Fmt.bytes(model.fileSizeBytes),
                     style = MaterialTheme.typography.bodySmall,
-                    color = TerminalTextDim,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    if (model.verified) "sha256 verified" else "sha256 unverified",
+                    if (model.verified) "SHA-256 verified" else "SHA-256 unverified",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (model.verified) TerminalPrimary else TerminalAccent,
+                    color = if (model.verified) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.secondary
+                    },
                 )
             }
             if (model.sha256 != null) {
                 Text(
                     "sha256: ${Fmt.sha(model.sha256)}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = TerminalTextDim,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -184,17 +186,17 @@ private fun ModelCard(
                         CircularProgressIndicator(
                             modifier = Modifier.size(14.dp),
                             strokeWidth = 2.dp,
-                            color = TerminalAccent,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     } else {
-                        Text("LOAD", fontFamily = FontFamily.Monospace)
+                        Text("LOAD")
                     }
                 }
                 TextButton(onClick = onVerify) {
-                    Text("verify", fontFamily = FontFamily.Monospace, color = TerminalTextDim)
+                    Text("Verify", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 TextButton(onClick = onDelete) {
-                    Text("delete", fontFamily = FontFamily.Monospace, color = TerminalDanger)
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -215,8 +217,8 @@ private fun DownloadControl(
     val isPaused = download is DownloadState.Paused
 
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -232,7 +234,7 @@ private fun DownloadControl(
                 Text(
                     "${(download.progress() * 100).toInt()}%",
                     style = MaterialTheme.typography.bodySmall,
-                    color = TerminalPrimary,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             LinearProgressIndicator(
@@ -243,13 +245,13 @@ private fun DownloadControl(
                 Text(
                     statusText(download),
                     style = MaterialTheme.typography.labelMedium,
-                    color = TerminalTextDim,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
                 if (!isPaused) {
-                    TextButton(onClick = onPause) { Text("pause", fontFamily = FontFamily.Monospace) }
+                    TextButton(onClick = onPause) { Text("Pause") }
                 }
-                TextButton(onClick = onCancel) { Text("cancel", color = TerminalDanger, fontFamily = FontFamily.Monospace) }
+                TextButton(onClick = onCancel) { Text("Cancel", color = MaterialTheme.colorScheme.error) }
             }
         }
     }
@@ -271,8 +273,8 @@ private fun statusText(state: DownloadState): String = when (state) {
         "$size @ ${Fmt.speed(state.bytesPerSecond)}"
     }
     is DownloadState.Verifying -> "sha-256 ${Fmt.bytes(state.totalBytes)}"
-    is DownloadState.Paused -> "paused — resume with 'start' again"
-    is DownloadState.Complete -> "done ✓ moved to models"
+    is DownloadState.Paused -> "Paused — resume by pressing Start again"
+    is DownloadState.Complete -> "Done ✓ moved to models"
     is DownloadState.Failed -> state.message
     DownloadState.Idle -> ""
 }
@@ -286,31 +288,31 @@ private fun AddModelDialog(
     var sha by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("add .litertlm model", fontFamily = FontFamily.Monospace) },
+        title = { Text("Add .litertlm model") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("model URL") },
-                    placeholder = { Text("https://…/model.litertlm", color = TerminalTextDim) },
+                    label = { Text("Model URL") },
+                    placeholder = { Text("https://…/model.litertlm") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = sha,
                     onValueChange = { sha = it },
-                    label = { Text("expected SHA-256 (optional)") },
+                    label = { Text("Expected SHA-256 (optional)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
         confirmButton = {
             TextButton(onClick = { onConfirm(url.trim(), sha.trim()) }, enabled = url.isNotBlank()) {
-                Text("start", color = TerminalPrimary, fontFamily = FontFamily.Monospace)
+                Text("Start", color = MaterialTheme.colorScheme.primary)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("cancel", fontFamily = FontFamily.Monospace) }
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
 }

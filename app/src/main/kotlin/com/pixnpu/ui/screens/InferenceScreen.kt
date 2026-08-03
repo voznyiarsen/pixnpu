@@ -20,17 +20,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -45,26 +46,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.pixnpu.ui.ChatMessage
 import com.pixnpu.ui.ChatRole
 import com.pixnpu.ui.components.StreamingText
-import com.pixnpu.ui.theme.TerminalDanger
-import com.pixnpu.ui.theme.TerminalLine
-import com.pixnpu.ui.theme.TerminalPrimary
-import com.pixnpu.ui.theme.TerminalTextDim
-import com.pixnpu.ui.theme.TerminalUser
-import com.pixnpu.ui.theme.TerminalUserText
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun InferenceScreen(
     messages: List<ChatMessage>,
@@ -92,7 +84,7 @@ fun InferenceScreen(
         if (isLoadingModel) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),
-                color = TerminalPrimary,
+                color = MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )
         }
@@ -106,7 +98,7 @@ fun InferenceScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(messages, key = { it.id }) { message ->
                         MessageBubble(message)
@@ -117,8 +109,8 @@ fun InferenceScreen(
 
         engineMessage?.let { message ->
             Text(
-                text = "[!] $message",
-                color = TerminalDanger,
+                text = message,
+                color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
             )
@@ -142,7 +134,7 @@ fun InferenceScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         )
     }
 }
@@ -157,17 +149,15 @@ private fun EmptyPrompt() {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "pix[npu]>_",
-            style = MaterialTheme.typography.bodyLarge.copy(
-                color = com.pixnpu.ui.theme.TerminalPrimary,
-                fontSize = 20.sp,
-            ),
+            text = "pix[npu]",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            text = "Local LLM inference on Google Tensor NPU.\nPull a .litertlm model, then start chatting.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = TerminalTextDim,
+            text = "Local LLM inference on Google Tensor NPU.\nPull a model, then start a conversation.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -178,8 +168,8 @@ private fun MessageBubble(message: ChatMessage) {
         ChatRole.USER -> {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Surface(
-                    shape = RoundedCornerShape(12.dp, 12.dp, 4.dp, 12.dp),
-                    color = TerminalUser,
+                    shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier.widthIn(max = 320.dp),
                 ) {
                     Column {
@@ -193,16 +183,16 @@ private fun MessageBubble(message: ChatMessage) {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(max = 200.dp)
-                                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)),
+                                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 16.dp)),
                                 contentScale = ContentScale.Crop,
                             )
                         }
                         if (message.text.isNotBlank()) {
                             Text(
                                 text = message.text,
-                                color = TerminalUserText,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 style = MaterialTheme.typography.bodyLarge,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                             )
                         }
                     }
@@ -210,22 +200,17 @@ private fun MessageBubble(message: ChatMessage) {
             }
         }
         ChatRole.ASSISTANT -> {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                StreamingText(
-                    text = message.text,
-                    caretVisible = message.streaming,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                )
-            }
+            StreamingText(
+                text = message.text,
+                caretVisible = message.streaming,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun InputBar(
     value: String,
@@ -241,13 +226,13 @@ private fun InputBar(
 ) {
     Surface(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(28.dp),
     ) {
-        Column(modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 4.dp)) {
+        Column(modifier = Modifier.padding(6.dp)) {
             pendingImageUri?.let { uri ->
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AsyncImage(
@@ -258,84 +243,92 @@ private fun InputBar(
                         contentDescription = "Pending image",
                         modifier = Modifier
                             .size(48.dp)
-                            .clip(RoundedCornerShape(8.dp)),
+                            .clip(RoundedCornerShape(10.dp)),
                         contentScale = ContentScale.Crop,
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(10.dp))
                     Text(
-                        text = "image attached",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TerminalTextDim,
+                        text = "Image attached",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = onClearImage) {
-                        Text("remove", color = TerminalDanger, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
 
-            Row(
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                FilledIconButton(
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
                     onClick = onPickImage,
-                    modifier = Modifier.padding(start = 4.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                    ),
+                    modifier = Modifier.size(56.dp),
                 ) {
-                    Text("+", fontSize = 18.sp, color = TerminalPrimary)
+                    Icon(
+                        imageVector = Icons.Outlined.AddPhotoAlternate,
+                        contentDescription = "Attach image",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
+                    )
                 }
 
-                OutlinedTextField(
+                BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
                     modifier = Modifier
                         .weight(1f)
-                        .focusRequester(focusRequester),
-                    placeholder = {
-                        Text(
-                            ">>> prompt",
-                            color = TerminalTextDim,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                        )
-                    },
+                        .focusRequester(focusRequester)
+                        .heightIn(min = 56.dp, max = 160.dp),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
                     ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = TerminalPrimary,
-                        unfocusedBorderColor = TerminalLine,
-                        cursorColor = TerminalPrimary,
-                    ),
-                    minLines = 1,
-                    maxLines = 6,
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { onSend() }),
                     singleLine = false,
+                    maxLines = 6,
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 56.dp, max = 160.dp)
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            if (value.isEmpty()) {
+                                Text(
+                                    "Ask anything",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
                 )
+
                 if (isGenerating) {
-                    TextButton(onClick = onStop) {
-                        Text(
-                            "\u25A0 STOP",
-                            color = TerminalDanger,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
+                    FilledIconButton(
+                        onClick = onStop,
+                        modifier = Modifier.size(56.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Stop,
+                            contentDescription = "Stop",
+                            modifier = Modifier.size(24.dp),
                         )
                     }
                 } else {
                     val canSend = value.isNotBlank() || pendingImageUri != null
-                    TextButton(
+                    FilledIconButton(
                         onClick = onSend,
                         enabled = canSend,
+                        modifier = Modifier.size(56.dp),
                     ) {
-                        Text(
-                            "\u25B6",
-                            color = if (canSend) TerminalPrimary else TerminalTextDim,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 16.sp,
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            modifier = Modifier.size(24.dp),
                         )
                     }
                 }

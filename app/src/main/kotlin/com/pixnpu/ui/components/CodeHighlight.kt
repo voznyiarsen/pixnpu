@@ -19,9 +19,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.pixnpu.ui.theme.TerminalCodeAccent
-import com.pixnpu.ui.theme.TerminalCodeBg
-import com.pixnpu.ui.theme.TerminalText
 
 private val FENCE = Regex("```([A-Za-z0-9_+#\\-.]*) *\\n?")
 
@@ -36,29 +33,32 @@ private val STRING_REGEX = Regex("\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'
 private val NUMBER_REGEX = Regex("\\b\\d[\\.\\d]*\\b")
 private val WORD_REGEX = Regex("[A-Za-z_][A-Za-z0-9_]*")
 
-private val COMMENT_COLOR = Color(0xFF5A6B5E)
-private val KEYWORD_COLOR = Color(0xFF7DD3FC)
-private val STRING_COLOR = Color(0xFFFCD34D)
-private val NUMBER_COLOR = Color(0xFFC4B5FD)
-
-private fun highlightCode(lang: String, code: String, base: Color = TerminalText): AnnotatedString {
+private fun highlightCode(
+    lang: String,
+    code: String,
+    base: Color,
+    commentColor: Color,
+    keywordColor: Color,
+    stringColor: Color,
+    numberColor: Color,
+): AnnotatedString {
     val keywords = keywordSetFor(lang)
     return buildAnnotatedString {
         withStyle(SpanStyle(color = base)) { append(code) }
         for (cm in COMMENT_REGEX.findAll(code)) {
-            addStyle(SpanStyle(color = COMMENT_COLOR), cm.range.first, cm.range.last + 1)
+            addStyle(SpanStyle(color = commentColor), cm.range.first, cm.range.last + 1)
         }
         for (sm in STRING_REGEX.findAll(code)) {
-            addStyle(SpanStyle(color = STRING_COLOR), sm.range.first, sm.range.last + 1)
+            addStyle(SpanStyle(color = stringColor), sm.range.first, sm.range.last + 1)
         }
         for (nm in NUMBER_REGEX.findAll(code)) {
-            addStyle(SpanStyle(color = NUMBER_COLOR), nm.range.first, nm.range.last + 1)
+            addStyle(SpanStyle(color = numberColor), nm.range.first, nm.range.last + 1)
         }
         for (km in WORD_REGEX.findAll(code)) {
             if (km.value in keywords) {
                 addStyle(
                     SpanStyle(
-                        color = KEYWORD_COLOR,
+                        color = keywordColor,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                     ),
                     km.range.first,
@@ -125,14 +125,18 @@ fun StreamingText(
 @Composable
 private fun HighlightedBody(text: String, style: TextStyle, modifier: Modifier = Modifier) {
     Text(
-        text = highlightInline(text),
+        text = highlightCode(
+            lang = "plain",
+            code = text,
+            base = MaterialTheme.colorScheme.onSurface,
+            commentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            keywordColor = MaterialTheme.colorScheme.primary,
+            stringColor = MaterialTheme.colorScheme.tertiary,
+            numberColor = MaterialTheme.colorScheme.secondary,
+        ),
         modifier = modifier,
         style = style,
     )
-}
-
-private fun highlightInline(text: String): AnnotatedString {
-    return highlightCode("plain", text)
 }
 
 @Composable
@@ -140,18 +144,26 @@ private fun CodeBlock(lang: String, content: String, maxHeight: Dp) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(TerminalCodeBg, RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(10.dp))
             .padding(10.dp),
     ) {
         if (lang.isNotEmpty()) {
             Text(
                 text = lang,
-                color = TerminalCodeAccent,
+                color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.labelMedium,
             )
         }
         Text(
-            text = highlightCode(lang, content, TerminalText),
+            text = highlightCode(
+                lang = lang,
+                code = content,
+                base = MaterialTheme.colorScheme.onSurface,
+                commentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                keywordColor = MaterialTheme.colorScheme.primary,
+                stringColor = MaterialTheme.colorScheme.tertiary,
+                numberColor = MaterialTheme.colorScheme.secondary,
+            ),
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
         )
     }

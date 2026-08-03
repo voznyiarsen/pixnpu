@@ -76,7 +76,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _params.combine(_systemPrompt) { p, s -> p to s }
                 .debounce(250)
                 .collect { (params, systemPrompt) ->
-                    if (engine.isLoaded) engine.reconfigure(params, systemPrompt)
+                    if (engine.isLoaded) {
+                        withContext(Dispatchers.IO) { engine.reconfigure(params, systemPrompt) }
+                    }
                 }
         }
     }
@@ -106,8 +108,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _engineMessage.value = null
             _isLoadingModel.value = model.name
             try {
-                if (engine.isLoaded) engine.unload()
-                engine.load(model.absolutePath, _params.value)
+                withContext(Dispatchers.IO) {
+                    if (engine.isLoaded) engine.unload()
+                    engine.load(model.absolutePath, _params.value)
+                }
                 _selectedModel.value = model
             } catch (t: Throwable) {
                 _selectedModel.value = null
@@ -120,7 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun unloadModel() {
         viewModelScope.launch {
-            engine.unload()
+            withContext(Dispatchers.IO) { engine.unload() }
             _selectedModel.value = null
         }
     }
@@ -128,7 +132,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteModel(model: LocalModel) {
         viewModelScope.launch {
             if (_selectedModel.value?.absolutePath == model.absolutePath) {
-                engine.unload()
+                withContext(Dispatchers.IO) { engine.unload() }
                 _selectedModel.value = null
             }
             manager.delete(model)
