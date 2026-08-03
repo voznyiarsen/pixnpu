@@ -120,6 +120,9 @@ class LiteRTLMEngine(private val context: Context) {
          val startedAt = System.nanoTime()
          var firstTokenAt: Long? = null
          var textLength = 0
+         val historySize = conversationHistory.size
+
+         Log.d("LiteRTLMEngine", "Starting generation (history turns: $historySize, backend: ${activeBackend?.label})")
 
          _metrics.value = _metrics.value.copy(
              status = EngineStatus.Generating,
@@ -144,7 +147,8 @@ class LiteRTLMEngine(private val context: Context) {
              // Update conversation reference
              conversation = newConversation
              
-             // Store the full response (with reasoning) in history
+             // Store the full response (with reasoning) in history for UI display
+             Log.d("LiteRTLMEngine", "Generated response (${fullReply.length} chars), stored in history")
              conversationHistory.add(Pair(content, fullReply))
 
              if (fullReply.isNotEmpty()) {
@@ -196,6 +200,8 @@ class LiteRTLMEngine(private val context: Context) {
          params: GenerationParams,
          systemPrompt: String
      ): Triple<Conversation, String, String> {
+         Log.d("LiteRTLMEngine", "Building cleaned history with ${conversationHistory.size} previous turns")
+         
          // Build history with reasoning stripped from assistant messages
          val historyContents = mutableListOf<Content>()
          
@@ -205,12 +211,15 @@ class LiteRTLMEngine(private val context: Context) {
              // Add assistant response with reasoning stripped
              val cleanedResponse = assistantResponse.stripReasoning()
              historyContents.add(Content.Text(cleanedResponse))
+             Log.d("LiteRTLMEngine", "Added history turn (user: ${userContent.size} contents, assistant: ${cleanedResponse.length} chars)")
          }
          
          // Add the new user message
          historyContents.addAll(newUserContent.contents)
+         Log.d("LiteRTLMEngine", "Added new user message (${newUserContent.contents.size} contents)")
          
          // Create a new conversation with system prompt
+         Log.d("LiteRTLMEngine", "Creating new conversation with system prompt (${systemPrompt.length} chars)")
          val newConversation = engineRef.createConversation(
              ConversationConfig(
                  systemInstruction = if (systemPrompt.isBlank()) null else Contents.of(systemPrompt),
@@ -225,9 +234,11 @@ class LiteRTLMEngine(private val context: Context) {
          
          // Build the full prompt with history
          val fullPromptContents = Contents.of(historyContents)
+         Log.d("LiteRTLMEngine", "Sending message with ${historyContents.size} history items")
          
          // Generate response
          val fullReply = newConversation.sendMessage(fullPromptContents).toString()
+         Log.d("LiteRTLMEngine", "Received full reply (${fullReply.length} chars)")
          
          return Triple(newConversation, fullReply, fullReply.stripReasoning())
      }
@@ -347,10 +358,13 @@ class LiteRTLMEngine(private val context: Context) {
       * Clears conversation history. Call this when starting a new chat.
       */
     suspend fun clearHistory() = mutex.withLock {
+        Log.d("LiteRTLMEngine", "Clearing conversation history (${conversationHistory.size} turns)")
         conversationHistory.clear()
         releaseConversation()
         conversation = currentParams?.let { params ->
-            createNewConversation(params, currentSystemPrompt)
+            createNewConversation(params, currentSystemPrompt).also {
+                Log.d("LiteRTLMEngine", "Created fresh conversation after history clear")
+            }
         }
     }
 

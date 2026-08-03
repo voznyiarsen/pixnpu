@@ -3,19 +3,30 @@ package com.pixnpu.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,15 +47,45 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
+import com.pixnpu.model.ModelLoadStatus
 import com.pixnpu.model.progress
 import com.pixnpu.util.Fmt
+
+@Composable
+private fun ShimmerOverlay() {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerX by transition.animateFloat(
+        initialValue = -1f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "shimmer",
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                        Color.Transparent,
+                    ),
+                    startX = shimmerX * 100,
+                    endX = (shimmerX + 1) * 100,
+                ),
+            ),
+    )
+}
 
 @Composable
 fun ModelSelectorScreen(
     models: List<LocalModel>,
     downloadState: DownloadState,
     selectedPath: String?,
-    loadingModelName: String?,
+    modelLoadStatus: Map<String, ModelLoadStatus>,
     onLoad: (LocalModel) -> Unit,
     onVerify: (LocalModel) -> Unit,
     onDelete: (LocalModel) -> Unit,
@@ -113,12 +154,12 @@ fun ModelSelectorScreen(
                 )
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(models, key = { it.name }) { model ->
                     ModelCard(
                         model = model,
                         selected = model.absolutePath == selectedPath,
-                        loading = model.name == loadingModelName,
+                        loadStatus = modelLoadStatus[model.name] ?: ModelLoadStatus.Idle,
                         onLoad = { onLoad(model) },
                         onVerify = { onVerify(model) },
                         onDelete = { pendingDelete = model },
@@ -171,20 +212,27 @@ fun ModelSelectorScreen(
 private fun ModelCard(
     model: LocalModel,
     selected: Boolean,
-    loading: Boolean,
+    loadStatus: ModelLoadStatus,
     onLoad: () -> Unit,
     onVerify: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
+        color = when (loadStatus) {
+            ModelLoadStatus.Success -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+            ModelLoadStatus.Failed -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+            else -> if (selected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            }
         },
         modifier = Modifier.fillMaxWidth(),
     ) {
+        if (loadStatus == ModelLoadStatus.Loading) {
+            ShimmerOverlay()
+        }
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -192,19 +240,6 @@ private fun ModelCard(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
-                if (loading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                } else if (selected) {
-                    Text(
-                        "Loaded",
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
@@ -232,18 +267,10 @@ private fun ModelCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onLoad,
-                    enabled = !selected && !loading,
+                    enabled = !selected && loadStatus != ModelLoadStatus.Loading,
                     shape = RoundedCornerShape(20.dp),
                 ) {
-                    if (loading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    } else {
-                        Text("Load")
-                    }
+                    Text("Load")
                 }
                 OutlinedButton(
                     onClick = onVerify,

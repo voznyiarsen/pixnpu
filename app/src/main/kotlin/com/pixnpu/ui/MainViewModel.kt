@@ -12,6 +12,7 @@ import com.pixnpu.engine.PromptTemplate
 import com.pixnpu.engine.PromptTemplates
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
+import com.pixnpu.model.ModelLoadStatus
 import com.pixnpu.model.ModelManager
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
@@ -59,6 +60,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isLoadingModel = MutableStateFlow<String?>(null)
     val isLoadingModel: StateFlow<String?> = _isLoadingModel.asStateFlow()
+
+    private val _modelLoadStatus = MutableStateFlow<Map<String, ModelLoadStatus>>(emptyMap())
+    val modelLoadStatus: StateFlow<Map<String, ModelLoadStatus>> = _modelLoadStatus.asStateFlow()
 
     private val _pendingImageUri = MutableStateFlow<Uri?>(null)
     val pendingImageUri: StateFlow<Uri?> = _pendingImageUri.asStateFlow()
@@ -120,6 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _engineMessage.value = null
             _isLoadingModel.value = model.name
+            _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Loading)
             try {
                 withContext(Dispatchers.IO) {
                     if (engine.isLoaded) engine.unload()
@@ -127,11 +132,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     engine.clearHistory()
                 }
                 _selectedModel.value = model
+                _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Success)
                 clearChat()
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Failed to load model: ${model.name}", e)
                 _selectedModel.value = null
                 _engineMessage.value = e.message ?: "Failed to load model"
+                _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Failed)
             } finally {
                 _isLoadingModel.value = null
             }
@@ -141,16 +148,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun unloadModel() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { engine.unload() }
+            _selectedModel.value?.let { model ->
+                _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Idle)
+            }
             _selectedModel.value = null
         }
     }
 
-    fun deleteModel(model: LocalModel) {
+     fun deleteModel(model: LocalModel) {
         viewModelScope.launch {
             if (_selectedModel.value?.absolutePath == model.absolutePath) {
                 withContext(Dispatchers.IO) { engine.unload() }
                 _selectedModel.value = null
             }
+            _modelLoadStatus.value = _modelLoadStatus.value - model.name
             manager.delete(model)
         }
     }

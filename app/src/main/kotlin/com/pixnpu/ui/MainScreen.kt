@@ -5,12 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,7 +45,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -80,6 +72,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val selectedModel by vm.selectedModel.collectAsStateWithLifecycle()
     val isGenerating by vm.isGenerating.collectAsStateWithLifecycle()
     val isLoadingModel by vm.isLoadingModel.collectAsStateWithLifecycle()
+    val modelLoadStatus by vm.modelLoadStatus.collectAsStateWithLifecycle()
     val engineMessage by vm.engineMessage.collectAsStateWithLifecycle()
     val metrics by vm.metrics.collectAsStateWithLifecycle()
     val pendingImageUri by vm.pendingImageUri.collectAsStateWithLifecycle()
@@ -177,43 +170,6 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
         Column(
             Modifier.fillMaxSize()
         ) {
-            if (isLoadingModel != null) {
-                val transition = rememberInfiniteTransition(label = "loading-think")
-                val shimmerX by transition.animateFloat(
-                    initialValue = -1f,
-                    targetValue = 2f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(1400, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart,
-                    ),
-                    label = "loading-shimmer",
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .height(4.dp)
-                            .width(40.dp)
-                            .background(
-                                brush = Brush.horizontalGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.tertiary.copy(0f),
-                                        MaterialTheme.colorScheme.tertiary,
-                                        MaterialTheme.colorScheme.secondary,
-                                        MaterialTheme.colorScheme.tertiary,
-                                        MaterialTheme.colorScheme.tertiary.copy(0f),
-                                    ),
-                                    startX = shimmerX * 100,
-                                    endX = (shimmerX + 1) * 100,
-                                ),
-                            ),
-                    )
-                }
-            }
             Column(
                 Modifier
                     .weight(1f)
@@ -244,19 +200,19 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                 },
                                 onClearImage = { vm.setPendingImage(null) },
                             )
-                            Screen.MODELS -> ModelSelectorScreen(
-                                models = models,
-                                downloadState = downloadState,
-                                selectedPath = selectedModel?.absolutePath,
-                                loadingModelName = isLoadingModel,
-                                onLoad = vm::loadModel,
-                                onVerify = vm::verifyModel,
-                                onDelete = vm::deleteModel,
-                                onDownload = vm::downloadModel,
-                                onImport = vm::importModel,
-                                onPause = vm::pauseDownload,
-                                onCancelDownload = vm::cancelDownload,
-                            )
+                             Screen.MODELS -> ModelSelectorScreen(
+                                 models = models,
+                                 downloadState = downloadState,
+                                 selectedPath = selectedModel?.absolutePath,
+                                 modelLoadStatus = modelLoadStatus,
+                                 onLoad = vm::loadModel,
+                                 onVerify = vm::verifyModel,
+                                 onDelete = vm::deleteModel,
+                                 onDownload = vm::downloadModel,
+                                 onImport = vm::importModel,
+                                 onPause = vm::pauseDownload,
+                                 onCancelDownload = vm::cancelDownload,
+                             )
                         }
                     }
                 }
