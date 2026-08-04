@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -36,14 +37,19 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.AddPhotoAlternate
+import androidx.compose.material.icons.outlined.AudioFile
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -63,6 +69,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -78,13 +85,16 @@ import coil.request.ImageRequest
 import com.pixnpu.ui.AudioClip
 import com.pixnpu.ui.ChatMessage
 import com.pixnpu.ui.ChatRole
+import com.pixnpu.ui.components.AudioFileDecodeResult
 import com.pixnpu.ui.components.AudioRecorder
 import com.pixnpu.ui.components.AudioRecorderPanel
 import com.pixnpu.ui.components.StreamingText
+import com.pixnpu.ui.components.decodeAudioFileToPcm
 import com.pixnpu.ui.components.pcmBytesToDurationMs
 import java.util.Locale
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InferenceScreen(
     messages: List<ChatMessage>,
@@ -107,6 +117,24 @@ fun InferenceScreen(
     val scope = rememberCoroutineScope()
     val recorder = remember { AudioRecorder(scope) }
     var isRecording by remember { mutableStateOf(false) }
+    var showAttachSheet by remember { mutableStateOf(false) }
+    var attachError by remember { mutableStateOf<String?>(null) }
+
+    val audioFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                when (val result = decodeAudioFileToPcm(context, uri)) {
+                    is AudioFileDecodeResult.Success -> {
+                        attachError = null
+                        onSetAudio(result.clip)
+                    }
+                    is AudioFileDecodeResult.Failure -> attachError = result.message
+                }
+            }
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -114,6 +142,18 @@ fun InferenceScreen(
         if (granted) {
             isRecording = true
             recorder.start()
+        }
+    }
+
+    val startRecording: () -> Unit = {
+        val granted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            isRecording = true
+            recorder.start()
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -174,6 +214,15 @@ fun InferenceScreen(
             )
         }
 
+        attachError?.let { error ->
+            Text(
+                text = error,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+        }
+
         InputBar(
             value = input,
             isGenerating = isGenerating,
@@ -188,27 +237,52 @@ fun InferenceScreen(
                 }
             },
             onStop = onStop,
-            onPickImage = onPickImage,
+            onAttachClick = { showAttachSheet = true },
             onClearImage = onClearImage,
             onClearAudio = { onSetAudio(null) },
-            onMicClick = {
-                if (isRecording) return@InputBar
-                val granted = ContextCompat.checkSelfPermission(
-                    context, Manifest.permission.RECORD_AUDIO,
-                ) == PackageManager.PERMISSION_GRANTED
-                if (granted) {
-                    isRecording = true
-                    recorder.start()
-                } else {
-                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                }
-            },
             focusRequester = focusRequester,
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
                 .padding(horizontal = 12.dp, vertical = 4.dp),
         )
+    }
+
+    if (showAttachSheet) {
+        ModalBottomSheet(onDismissRequest = { showAttachSheet = false }) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp)
+                    .padding(bottom = 36.dp),
+                horizontalArrangement = Arrangement.spacedBy(32.dp),
+            ) {
+                AttachOption(
+                    icon = Icons.Outlined.PhotoLibrary,
+                    label = "Gallery",
+                    onClick = {
+                        showAttachSheet = false
+                        onPickImage()
+                    },
+                )
+                AttachOption(
+                    icon = Icons.Outlined.Mic,
+                    label = "Audio",
+                    onClick = {
+                        showAttachSheet = false
+                        startRecording()
+                    },
+                )
+                AttachOption(
+                    icon = Icons.Outlined.AudioFile,
+                    label = "Audio file",
+                    onClick = {
+                        showAttachSheet = false
+                        audioFileLauncher.launch(arrayOf("audio/*"))
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -339,6 +413,7 @@ private fun MessageBubble(message: ChatMessage) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun InputBar(
     value: String,
@@ -349,10 +424,9 @@ private fun InputBar(
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onPickImage: () -> Unit,
+    onAttachClick: () -> Unit,
     onClearImage: () -> Unit,
     onClearAudio: () -> Unit,
-    onMicClick: () -> Unit,
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
@@ -411,24 +485,13 @@ private fun InputBar(
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
-                    onClick = onPickImage,
-                    modifier = Modifier.size(56.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.AddPhotoAlternate,
-                        contentDescription = "Attach image",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(24.dp),
-                    )
-                }
-                IconButton(
-                    onClick = onMicClick,
+                    onClick = onAttachClick,
                     enabled = !isRecording,
                     modifier = Modifier.size(56.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Mic,
-                        contentDescription = "Record voice note",
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = "Attach",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp),
                     )
@@ -552,6 +615,39 @@ private fun AudioClipChip(
             text = String.format(Locale.ROOT, "%.1fs", durationMs / 1000f),
             style = MaterialTheme.typography.labelMedium,
             color = tint,
+        )
+    }
+}
+
+@Composable
+private fun AttachOption(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Surface(
+            onClick = onClick,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.size(64.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(28.dp),
+                )
+            }
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

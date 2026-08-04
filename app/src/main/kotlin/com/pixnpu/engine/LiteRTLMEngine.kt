@@ -388,43 +388,37 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                     ActiveBackend.GPU -> Backend.GPU()
                     is ActiveBackend.CPU -> Backend.CPU(threadCount = candidate.threads)
                 }
-                val config = EngineConfig(
-                    modelPath = modelPath,
-                    backend = backend,
-                    // Audio modules must run on CPU (gallery practice for Gemma 3n).
-                    audioBackend = Backend.CPU(),
-                    maxNumTokens = params.contextTokens,
-                    cacheDir = context.cacheDir.absolutePath,
+                // Audio modules must run on CPU, vision on GPU (gallery practice for
+                // Gemma 3n). Some models lack audio and/or vision support and their
+                // initialization fails when the corresponding backend is requested, so
+                // try progressively leaner variants until one initializes.
+                val variants = listOf(
+                    Triple("audio+vision", true, true),
+                    Triple("audio only", true, false),
+                    Triple("vision only", false, true),
+                    Triple("text only", false, false),
                 )
-                val candidateEngine = Engine(config)
-                try {
-                    candidateEngine.initialize()
-                } catch (e: Exception) {
-                    Log.w("LiteRTLMEngine", "Backend ${candidate.label} initialization failed", e)
-                    try { candidateEngine.close() } catch (_: Exception) { }
-                    // Some models have no audio support; retry without audioBackend
-                    // before giving up on this candidate.
-                    val noAudioConfig = EngineConfig(
+                for ((label, withAudio, withVision) in variants) {
+                    val config = EngineConfig(
                         modelPath = modelPath,
                         backend = backend,
+                        visionBackend = if (withVision) Backend.GPU() else null,
+                        audioBackend = if (withAudio) Backend.CPU() else null,
                         maxNumTokens = params.contextTokens,
                         cacheDir = context.cacheDir.absolutePath,
                     )
-                    val noAudioEngine = Engine(noAudioConfig)
+                    val candidateEngine = Engine(config)
                     try {
-                        noAudioEngine.initialize()
-                        engine = noAudioEngine
-                        Log.d("LiteRTLMEngine", "Backend ${candidate.label} initialized without audio support")
+                        candidateEngine.initialize()
+                        engine = candidateEngine
+                        Log.d("LiteRTLMEngine", "Backend ${candidate.label} initialized (${label})")
                         return candidate
-                    } catch (e2: Exception) {
-                        Log.w("LiteRTLMEngine", "Backend ${candidate.label} failed without audio too", e2)
-                        try { noAudioEngine.close() } catch (_: Exception) { }
-                        throw e
+                    } catch (e: Exception) {
+                        Log.w("LiteRTLMEngine", "Backend ${candidate.label} init failed (${label}): ${e.message}")
+                        try { candidateEngine.close() } catch (_: Exception) { }
                     }
                 }
-                engine = candidateEngine
-                Log.d("LiteRTLMEngine", "Backend ${candidate.label} initialized successfully")
-                return candidate
+                Log.w("LiteRTLMEngine", "Backend ${candidate.label} failed on all variant configs")
             } catch (e: Exception) {
                 lastError = e
                 Log.w("LiteRTLMEngine", "Backend ${candidate.label} failed: ${e.message}")
