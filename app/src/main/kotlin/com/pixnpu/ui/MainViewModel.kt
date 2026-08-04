@@ -76,6 +76,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingImageUri = MutableStateFlow<Uri?>(null)
     val pendingImageUri: StateFlow<Uri?> = _pendingImageUri.asStateFlow()
 
+    private val _pendingAudio = MutableStateFlow<AudioClip?>(null)
+    val pendingAudio: StateFlow<AudioClip?> = _pendingAudio.asStateFlow()
+
     private val _engineMessage = MutableStateFlow<String?>(null)
     val engineMessage: StateFlow<String?> = _engineMessage.asStateFlow()
 
@@ -244,6 +247,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _pendingImageUri.value = uri
     }
 
+    fun setPendingAudio(clip: AudioClip?) {
+        _pendingAudio.value = clip
+    }
+
     /**
      * Maximum prompt length in characters
      */
@@ -257,9 +264,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun send(text: String) {
         val prompt = text.trim()
         val imageUri = _pendingImageUri.value
+        val audio = _pendingAudio.value
         
         // Validate input
-        if (prompt.isEmpty() && imageUri == null) return
+        if (prompt.isEmpty() && imageUri == null && audio == null) return
         if (prompt.isNotEmpty() && prompt.length > maxPromptLength) {
             _engineMessage.value = "Prompt exceeds maximum length of $maxPromptLength characters"
             return
@@ -274,12 +282,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        Log.d("MainViewModel", "Sending prompt (${prompt.length} chars, image=${imageUri != null})")
+        Log.d("MainViewModel", "Sending prompt (${prompt.length} chars, image=${imageUri != null}, audio=${audio != null})")
         val userMessage = ChatMessage(
             id = messageId.incrementAndGet(),
             role = ChatRole.USER,
             text = prompt,
             imageUri = imageUri,
+            audioBytes = audio?.bytes,
         )
         val assistantMessage =
             ChatMessage(messageId.incrementAndGet(), ChatRole.ASSISTANT, "", streaming = true)
@@ -293,12 +302,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         _pendingImageUri.value = null
+        _pendingAudio.value = null
         _isGenerating.value = true
 
         generationJob = viewModelScope.launch {
             try {
                 val contentList = buildList {
-                    add(Content.Text(prompt))
+                    if (audio != null) {
+                        add(Content.AudioBytes(audio.bytes))
+                    }
                     if (imageUri != null) {
                         val path = withContext(Dispatchers.IO) {
                             resolveImagePath(imageUri)
@@ -307,6 +319,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             add(Content.ImageFile(path))
                         }
                     }
+                    // Text last so the final prompt token follows the media (gallery practice).
+                    add(Content.Text(prompt))
                 }
                 engine.generate(contentList, _template.value).collect { chunk ->
                     if (chunk.isNotEmpty()) {

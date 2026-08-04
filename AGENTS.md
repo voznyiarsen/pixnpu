@@ -149,6 +149,18 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 - **Graceful init failures**: backend/warmup errors are logged and handled
   without crashing the process.
 
+### Audio (voice notes)
+- Mic button in the composer records a voice note via `AudioRecord` as raw
+  16-bit PCM mono at 16 kHz (`AudioRecorder`), capped at 30 s, sent to the
+  model as `Content.AudioBytes` — the format LiteRT-LM audio models (e.g.
+  Gemma 3n) expect.
+- `EngineConfig.audioBackend = Backend.CPU()` on load (gallery practice —
+  audio modules must run on CPU). Models without audio support automatically
+  fall back to loading without an audio backend.
+- Requires `RECORD_AUDIO` permission (runtime-requested on first mic tap);
+  models without audio capabilities will error through the normal generate()
+  path.
+
 ## Conventions
 
 - Use `MutableStateFlow`/`StateFlow` for all async state — never `LiveData`.

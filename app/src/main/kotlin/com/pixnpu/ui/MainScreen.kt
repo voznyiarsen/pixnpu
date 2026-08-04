@@ -76,6 +76,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val engineMessage by vm.engineMessage.collectAsStateWithLifecycle()
     val metrics by vm.metrics.collectAsStateWithLifecycle()
     val pendingImageUri by vm.pendingImageUri.collectAsStateWithLifecycle()
+    val pendingAudio by vm.pendingAudio.collectAsStateWithLifecycle()
 
     var tab by remember { mutableStateOf(Screen.CHAT) }
     var showParams by remember { mutableStateOf(false) }
@@ -187,6 +188,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                             selectedModel = selectedModel?.name,
                             engineMessage = engineMessage,
                             pendingImageUri = pendingImageUri,
+                            pendingAudio = pendingAudio,
                             onSend = vm::send,
                             onStop = vm::stop,
                             onPickImage = {
@@ -195,6 +197,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                 )
                             },
                             onClearImage = { vm.setPendingImage(null) },
+                            onSetAudio = { vm.setPendingAudio(it) },
                         )
                              Screen.MODELS -> ModelSelectorScreen(
                                  models = models,

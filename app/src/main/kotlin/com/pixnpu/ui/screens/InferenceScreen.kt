@@ -1,6 +1,10 @@
 package com.pixnpu.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -33,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,10 +48,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,11 +72,18 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.pixnpu.ui.AudioClip
 import com.pixnpu.ui.ChatMessage
 import com.pixnpu.ui.ChatRole
+import com.pixnpu.ui.components.AudioRecorder
+import com.pixnpu.ui.components.AudioRecorderPanel
 import com.pixnpu.ui.components.StreamingText
+import com.pixnpu.ui.components.pcmBytesToDurationMs
+import java.util.Locale
+import kotlinx.coroutines.launch
 
 @Composable
 fun InferenceScreen(
@@ -79,14 +93,33 @@ fun InferenceScreen(
     selectedModel: String?,
     engineMessage: String?,
     pendingImageUri: Uri?,
+    pendingAudio: AudioClip?,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
     onClearImage: () -> Unit,
+    onSetAudio: (AudioClip?) -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val recorder = remember { AudioRecorder(scope) }
+    var isRecording by remember { mutableStateOf(false) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            isRecording = true
+            recorder.start()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { recorder.release() }
+    }
 
     LaunchedEffect(messages.size, messages.lastOrNull()?.text?.length) {
         if (messages.isNotEmpty()) {
@@ -124,13 +157,32 @@ fun InferenceScreen(
             )
         }
 
+        if (isRecording) {
+            AudioRecorderPanel(
+                recorder = recorder,
+                onSend = { clip ->
+                    isRecording = false
+                    onSetAudio(clip)
+                },
+                onClose = {
+                    recorder.stop()
+                    isRecording = false
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+
         InputBar(
             value = input,
             isGenerating = isGenerating,
+            isRecording = isRecording,
             pendingImageUri = pendingImageUri,
+            pendingAudio = pendingAudio,
             onValueChange = { input = it },
             onSend = {
-                if (input.isNotBlank() || pendingImageUri != null) {
+                if (input.isNotBlank() || pendingImageUri != null || pendingAudio != null) {
                     onSend(input)
                     input = ""
                 }
@@ -138,6 +190,19 @@ fun InferenceScreen(
             onStop = onStop,
             onPickImage = onPickImage,
             onClearImage = onClearImage,
+            onClearAudio = { onSetAudio(null) },
+            onMicClick = {
+                if (isRecording) return@InputBar
+                val granted = ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.RECORD_AUDIO,
+                ) == PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    isRecording = true
+                    recorder.start()
+                } else {
+                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            },
             focusRequester = focusRequester,
             modifier = Modifier
                 .fillMaxWidth()
@@ -231,6 +296,13 @@ private fun MessageBubble(message: ChatMessage) {
                                 contentScale = ContentScale.Crop,
                             )
                         }
+                        message.audioBytes?.let { bytes ->
+                            AudioClipChip(
+                                durationMs = pcmBytesToDurationMs(bytes),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            )
+                        }
                         if (message.text.isNotBlank()) {
                             Text(
                                 text = message.text,
@@ -271,12 +343,16 @@ private fun MessageBubble(message: ChatMessage) {
 private fun InputBar(
     value: String,
     isGenerating: Boolean,
+    isRecording: Boolean,
     pendingImageUri: Uri?,
+    pendingAudio: AudioClip?,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
     onClearImage: () -> Unit,
+    onClearAudio: () -> Unit,
+    onMicClick: () -> Unit,
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
@@ -286,6 +362,24 @@ private fun InputBar(
         shape = RoundedCornerShape(36.dp),
     ) {
         Column(modifier = Modifier.padding(6.dp)) {
+            pendingAudio?.let { clip ->
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AudioClipChip(durationMs = clip.durationMs)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = "Audio Attached",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onClearAudio) {
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
             pendingImageUri?.let { uri ->
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
@@ -323,6 +417,18 @@ private fun InputBar(
                     Icon(
                         imageVector = Icons.Outlined.AddPhotoAlternate,
                         contentDescription = "Attach image",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onMicClick,
+                    enabled = !isRecording,
+                    modifier = Modifier.size(56.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Mic,
+                        contentDescription = "Record voice note",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp),
                     )
@@ -376,7 +482,7 @@ private fun InputBar(
                         )
                     }
                 } else {
-                    val canSend = value.isNotBlank() || pendingImageUri != null
+                    val canSend = value.isNotBlank() || pendingImageUri != null || pendingAudio != null
                     FilledIconButton(
                         onClick = onSend,
                         enabled = canSend,
@@ -416,5 +522,36 @@ private fun InputBar(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AudioClipChip(
+    durationMs: Long,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                shape = RoundedCornerShape(10.dp),
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Mic,
+            contentDescription = "Voice note",
+            tint = tint,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = String.format(Locale.ROOT, "%.1fs", durationMs / 1000f),
+            style = MaterialTheme.typography.labelMedium,
+            color = tint,
+        )
     }
 }

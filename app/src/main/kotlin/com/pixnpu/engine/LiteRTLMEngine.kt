@@ -391,6 +391,8 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                 val config = EngineConfig(
                     modelPath = modelPath,
                     backend = backend,
+                    // Audio modules must run on CPU (gallery practice for Gemma 3n).
+                    audioBackend = Backend.CPU(),
                     maxNumTokens = params.contextTokens,
                     cacheDir = context.cacheDir.absolutePath,
                 )
@@ -400,7 +402,25 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                 } catch (e: Exception) {
                     Log.w("LiteRTLMEngine", "Backend ${candidate.label} initialization failed", e)
                     try { candidateEngine.close() } catch (_: Exception) { }
-                    throw e
+                    // Some models have no audio support; retry without audioBackend
+                    // before giving up on this candidate.
+                    val noAudioConfig = EngineConfig(
+                        modelPath = modelPath,
+                        backend = backend,
+                        maxNumTokens = params.contextTokens,
+                        cacheDir = context.cacheDir.absolutePath,
+                    )
+                    val noAudioEngine = Engine(noAudioConfig)
+                    try {
+                        noAudioEngine.initialize()
+                        engine = noAudioEngine
+                        Log.d("LiteRTLMEngine", "Backend ${candidate.label} initialized without audio support")
+                        return candidate
+                    } catch (e2: Exception) {
+                        Log.w("LiteRTLMEngine", "Backend ${candidate.label} failed without audio too", e2)
+                        try { noAudioEngine.close() } catch (_: Exception) { }
+                        throw e
+                    }
                 }
                 engine = candidateEngine
                 Log.d("LiteRTLMEngine", "Backend ${candidate.label} initialized successfully")
