@@ -1,25 +1,55 @@
 package com.pixnpu.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.pixnpu.engine.ThinkingSegment
+import com.pixnpu.engine.parseThinking
 
 private val FENCE = Regex("```([A-Za-z0-9_+#\\-.]*) *\\n?")
 
@@ -60,7 +90,7 @@ private fun highlightCode(
                 addStyle(
                     SpanStyle(
                         color = keywordColor,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        fontWeight = FontWeight.Bold,
                     ),
                     km.range.first,
                     km.range.last + 1,
@@ -104,13 +134,41 @@ fun StreamingText(
     caretVisible: Boolean = false,
     bodyStyle: TextStyle = MaterialTheme.typography.bodyLarge,
 ) {
-    val segments = remember(text) { scanSegments(text) }
+    val thinkingSegments = remember(text) { parseThinking(text) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        segments.forEach { seg ->
+        thinkingSegments.forEachIndexed { index, segment ->
+            val isLast = index == thinkingSegments.lastIndex
+            when (segment) {
+                is ThinkingSegment.Text -> SegmentedBody(
+                    segments = remember(segment.content) { scanSegments(segment.content) },
+                    caretVisible = caretVisible && isLast,
+                    bodyStyle = bodyStyle,
+                    maxCodeHeight = maxCodeHeight,
+                )
+                is ThinkingSegment.Thinking -> ThinkingBlock(
+                    content = segment.content,
+                    closed = segment.closed,
+                    caretVisible = caretVisible && isLast && !segment.closed,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SegmentedBody(
+    segments: List<Segment>,
+    caretVisible: Boolean,
+    bodyStyle: TextStyle,
+    maxCodeHeight: Dp,
+) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        segments.forEachIndexed { index, seg ->
+            val isLast = index == segments.lastIndex
             when (seg) {
                 is Segment.Text -> HighlightedBody(
-                    text = if (caretVisible) "${seg.content}▌" else seg.content,
+                    text = if (caretVisible && isLast) "${seg.content}▌" else seg.content,
                     style = bodyStyle,
                 )
                 is Segment.Code -> CodeBlock(
@@ -121,6 +179,110 @@ fun StreamingText(
             }
         }
     }
+}
+
+/**
+ * Collapsible "Thinking" section for model reasoning traces (<think>...</think>).
+ * Auto-expands while the thought is still streaming in; collapses on tap.
+ */
+@Composable
+private fun ThinkingBlock(
+    content: String,
+    closed: Boolean,
+    caretVisible: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    // Auto-expand while thinking is still in progress.
+    if (!closed) {
+        expanded = true
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (!closed) {
+                ThinkingPulse()
+            }
+            Text(
+                text = "Thinking",
+                style = MaterialTheme.typography.labelLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ArrowDropUp else Icons.Filled.ArrowDropDown,
+                contentDescription = if (expanded) "Hide thinking" else "Show thinking",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(),
+            exit = shrinkVertically(),
+        ) {
+            val lineColor = MaterialTheme.colorScheme.outlineVariant
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = RoundedCornerShape(10.dp),
+                    )
+                    .drawBehind {
+                        drawLine(
+                            color = lineColor,
+                            start = Offset(0f, 0f),
+                            end = Offset(0f, size.height),
+                            strokeWidth = 2.dp.toPx(),
+                        )
+                    }
+                    .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 8.dp),
+            ) {
+                SegmentedBody(
+                    segments = remember(content) { scanSegments(if (caretVisible) "$content▌" else content) },
+                    caretVisible = false,
+                    bodyStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                    maxCodeHeight = 240.dp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThinkingPulse() {
+    val transition = rememberInfiniteTransition(label = "thinking-pulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(700, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "thinking-pulse-alpha",
+    )
+    Box(
+        modifier = Modifier
+            .size(7.dp)
+            .alpha(alpha)
+            .background(
+                color = MaterialTheme.colorScheme.tertiary,
+                shape = CircleShape,
+            ),
+    )
 }
 
 @Composable
