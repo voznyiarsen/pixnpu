@@ -17,6 +17,7 @@ import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelLoadStatus
 import com.pixnpu.model.ModelManager
 import com.pixnpu.model.ModelManagerInterface
+import com.pixnpu.ui.components.pcm16ToWav
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
@@ -309,7 +310,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val contentList = buildList {
                     if (audio != null) {
-                        add(Content.AudioBytes(audio.bytes))
+                        // LiteRT-LM's native preprocessor (miniaudio) needs a container
+                        // header to decode audio; raw PCM fails with error -10.
+                        add(Content.AudioBytes(pcm16ToWav(audio.bytes)))
                     }
                     if (imageUri != null) {
                         val path = withContext(Dispatchers.IO) {

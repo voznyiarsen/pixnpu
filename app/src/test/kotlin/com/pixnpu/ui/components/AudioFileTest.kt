@@ -85,4 +85,54 @@ class AudioFileTest {
             assert(s >= Short.MIN_VALUE && s <= Short.MAX_VALUE)
         }
     }
+
+    @Test
+    fun pcm16ToWav_headerFields() {
+        val pcm = ByteArray(64000) { 0 }
+        val wav = pcm16ToWav(pcm)
+        assertEquals(44 + pcm.size, wav.size)
+        assertEquals("RIFF", String(wav, 0, 4))
+        assertEquals("WAVE", String(wav, 8, 4))
+        assertEquals("fmt ", String(wav, 12, 4))
+        assertEquals(16, readLeInt(wav, 16)) // fmt chunk size
+        assertEquals(1, readLeShort(wav, 20)) // PCM format
+        assertEquals(1, readLeShort(wav, 22)) // mono
+        assertEquals(16_000, readLeInt(wav, 24)) // sample rate
+        assertEquals(32_000, readLeInt(wav, 28)) // byte rate
+        assertEquals(2, readLeShort(wav, 32)) // block align
+        assertEquals(16, readLeShort(wav, 34)) // bits per sample
+        assertEquals("data", String(wav, 36, 4))
+        assertEquals(pcm.size, readLeInt(wav, 40)) // data size
+        assertEquals(36 + pcm.size, readLeInt(wav, 4)) // RIFF chunk size
+    }
+
+    @Test
+    fun pcm16ToWav_preservesPayload() {
+        val pcm = ByteArray(1024) { (it % 251).toByte() }
+        val wav = pcm16ToWav(pcm)
+        for (i in pcm.indices) {
+            assertEquals(pcm[i], wav[44 + i])
+        }
+    }
+
+    @Test
+    fun pcm16ToWav_emptyPcm_stillValidContainer() {
+        val wav = pcm16ToWav(ByteArray(0))
+        assertEquals(44, wav.size)
+        assertEquals(0, readLeInt(wav, 40))
+    }
+
+    private fun readLeShort(bytes: ByteArray, offset: Int): Int {
+        val lo = bytes[offset].toInt() and 0xFF
+        val hi = bytes[offset + 1].toInt() and 0xFF
+        return lo or (hi shl 8)
+    }
+
+    private fun readLeInt(bytes: ByteArray, offset: Int): Int {
+        var v = 0
+        for (i in 0 until 4) {
+            v = v or ((bytes[offset + i].toInt() and 0xFF) shl (8 * i))
+        }
+        return v
+    }
 }

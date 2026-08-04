@@ -28,9 +28,9 @@ sealed class AudioFileDecodeResult {
 }
 
 /**
- * Decodes an arbitrary audio file (mp3/m4a/ogg/wav picked from storage) into the
- * raw 16 kHz mono 16-bit PCM format that `Content.AudioBytes` expects, using
- * MediaExtractor + MediaCodec followed by manual downmix/resample.
+ * Decodes an arbitrary audio file (mp3/m4a/ogg/wav picked from storage) into raw
+ * 16 kHz mono 16-bit PCM, using MediaExtractor + MediaCodec followed by manual
+ * downmix/resample. The PCM is sent to the model WAV-wrapped (see [pcm16ToWav]).
  */
 suspend fun decodeAudioFileToPcm(context: Context, uri: Uri): AudioFileDecodeResult =
     withContext(Dispatchers.IO) {
@@ -190,4 +190,54 @@ private fun shortAt(pcm: ByteArray, sampleIndex: Int): Short {
     val lo = pcm[sampleIndex * 2].toInt() and 0xFF
     val hi = pcm[sampleIndex * 2 + 1].toInt() shl 8
     return (lo or hi).toShort()
+}
+
+/**
+ * Wraps raw 16-bit PCM into a canonical WAV container. LiteRT-LM's native audio
+ * preprocessor decodes `Content.AudioBytes` with miniaudio's `ma_decoder_init_memory`,
+ * which sniffs for a container header — raw PCM cannot be identified (fails with
+ * "Failed to initialize miniaudio decoder, error code: -10"). WAV's decoder is
+ * always built into miniaudio, so a 44-byte RIFF header makes any PCM16 payload
+ * decodable.
+ */
+fun pcm16ToWav(
+    pcm: ByteArray,
+    sampleRate: Int = AUDIO_TARGET_SAMPLE_RATE,
+    channels: Int = 1,
+): ByteArray {
+    val dataSize = pcm.size
+    val byteRate = sampleRate * channels * 2
+    val blockAlign = channels * 2
+    val out = ByteArray(44 + dataSize)
+    out.writeAscii(0, "RIFF")
+    out.writeLeInt(4, 36 + dataSize)
+    out.writeAscii(8, "WAVE")
+    out.writeAscii(12, "fmt ")
+    out.writeLeInt(16, 16) // fmt chunk size (PCM)
+    out.writeLeShort(20, 1) // audio format = PCM
+    out.writeLeShort(22, channels)
+    out.writeLeInt(24, sampleRate)
+    out.writeLeInt(28, byteRate)
+    out.writeLeShort(32, blockAlign)
+    out.writeLeShort(34, 16) // bits per sample
+    out.writeAscii(36, "data")
+    out.writeLeInt(40, dataSize)
+    pcm.copyInto(out, 44)
+    return out
+}
+
+private fun ByteArray.writeAscii(offset: Int, s: String) {
+    for (i in s.indices) this[offset + i] = s[i].code.toByte()
+}
+
+private fun ByteArray.writeLeShort(offset: Int, value: Int) {
+    this[offset] = (value and 0xFF).toByte()
+    this[offset + 1] = ((value shr 8) and 0xFF).toByte()
+}
+
+private fun ByteArray.writeLeInt(offset: Int, value: Int) {
+    this[offset] = (value and 0xFF).toByte()
+    this[offset + 1] = ((value shr 8) and 0xFF).toByte()
+    this[offset + 2] = ((value shr 16) and 0xFF).toByte()
+    this[offset + 3] = ((value shr 24) and 0xFF).toByte()
 }

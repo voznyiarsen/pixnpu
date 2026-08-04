@@ -151,9 +151,15 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 
 ### Audio (voice notes)
 - Mic button in the composer records a voice note via `AudioRecord` as raw
-  16-bit PCM mono at 16 kHz (`AudioRecorder`), capped at 30 s, sent to the
-  model as `Content.AudioBytes` — the format LiteRT-LM audio models (e.g.
-  Gemma 3n) expect.
+  16-bit PCM mono at 16 kHz (`AudioRecorder`), capped at 30 s. Audio files
+  picked from storage are decoded to the same format via MediaExtractor +
+  MediaCodec (`AudioFile.kt`, downmix + linear resample, 5 min cap).
+- **`Content.AudioBytes` must be WAV-wrapped** (`pcm16ToWav` in `AudioFile.kt`,
+  applied at send time in `MainViewModel.send()`): LiteRT-LM's native audio
+  preprocessor decodes with miniaudio's `ma_decoder_init_memory`, which sniffs
+  for a container header. Raw PCM (or OGG — vorbis not compiled in) fails with
+  `Failed to initialize miniaudio decoder, error code: -10`. WAV's decoder is
+  always built in.
 - `EngineConfig.audioBackend = Backend.CPU()` on load (gallery practice —
   audio modules must run on CPU). Models without audio support automatically
   fall back to loading without an audio backend.
