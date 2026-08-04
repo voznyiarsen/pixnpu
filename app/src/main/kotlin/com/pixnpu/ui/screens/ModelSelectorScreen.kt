@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +27,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -32,6 +35,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -244,6 +249,9 @@ private fun ModelCard(
                 ModalityMenu(
                     selectedModality = selectedModality,
                     onModalityChange = onModalityChange,
+                    modifier = Modifier
+                        .widthIn(min = 96.dp)
+                        .height(40.dp),
                 )
                 OutlinedButton(
                     onClick = { onLoad(selectedModality) },
@@ -282,20 +290,38 @@ private fun ModelCard(
 private fun ModalityMenu(
     selectedModality: Modality,
     onModalityChange: (Modality) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = !expanded },
+        modifier = modifier,
     ) {
-        Text(
-            text = selectedModality.label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        OutlinedButton(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(20.dp),
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ),
             modifier = Modifier
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            maxLines = 1,
-        )
+                .fillMaxWidth()
+                .height(40.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        ) {
+            Text(
+                text = selectedModality.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Icon(
+                imageVector = Icons.Default.ArrowDropDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+        }
         ExposedDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
