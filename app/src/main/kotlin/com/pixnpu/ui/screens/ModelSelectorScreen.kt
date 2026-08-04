@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -187,6 +189,7 @@ fun ModelSelectorScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ModelCard(
     model: LocalModel,
@@ -245,7 +248,10 @@ private fun ModelCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 ModalityMenu(
                     selectedModality = selectedModality,
                     onModalityChange = onModalityChange,
@@ -304,9 +310,7 @@ private fun ModalityMenu(
             colors = ButtonDefaults.outlinedButtonColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(40.dp),
+            modifier = Modifier.height(40.dp),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         ) {
             Text(
