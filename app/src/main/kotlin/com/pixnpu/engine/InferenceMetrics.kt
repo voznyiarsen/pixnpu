@@ -14,6 +14,7 @@ data class InferenceMetrics(
     val contextTokens: Int = 0,
     val maxContextTokens: Int = 0,
     val ttftMs: Long? = null,
+    val warmupMs: Long? = null,
     val totalTokens: Int = 0,
     val tokensPerSecond: Double = 0.0,
     val currentTokensPerSecond: Double = 0.0,

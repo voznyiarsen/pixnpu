@@ -6,14 +6,17 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.ai.edge.litertlm.Content
+import com.pixnpu.di.AppContainer
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.LiteRTLMEngine
+import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.PromptTemplate
 import com.pixnpu.engine.PromptTemplates
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelLoadStatus
 import com.pixnpu.model.ModelManager
+import com.pixnpu.model.ModelManagerInterface
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
@@ -33,8 +36,14 @@ import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val manager = ModelManager(application)
-    private val engine = LiteRTLMEngine(application)
+    // Use interfaces for better testability
+    private val container = AppContainer(application)
+    private val manager: ModelManagerInterface = container.modelManager
+    private val engine: LiteRTLMEngineInterface = container.engine
+    
+    // Keep references to concrete implementations for cases where interface isn't sufficient
+    private val rawManager: ModelManager = container.rawModelManager
+    private val rawEngine: LiteRTLMEngine = container.rawEngine
 
     val models: StateFlow<List<LocalModel>> = manager.models
     val downloadState: StateFlow<DownloadState> = manager.downloadState
@@ -102,9 +111,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _template.value = template
     }
 
+    /**
+     * Maximum URL length
+     */
+    private val maxUrlLength = 2048
+
     fun downloadModel(url: String, expectedSha256: String?) {
         Log.d("MainViewModel", "Download requested: $url")
-        manager.startDownload(url, expectedSha256)
+        
+        // Validate URL before passing to manager
+        try {
+            require(url.isNotBlank()) { "URL cannot be blank" }
+            require(url.length <= maxUrlLength) { "URL exceeds maximum length" }
+            require(url.startsWith("http://") || url.startsWith("https://")) { 
+                "URL must start with http:// or https://" 
+            }
+            manager.startDownload(url, expectedSha256)
+        } catch (e: IllegalArgumentException) {
+            _engineMessage.value = e.message ?: "Invalid URL"
+        }
     }
 
     fun importModel(uri: Uri) {
@@ -121,10 +146,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadModel(model: LocalModel) {
         Log.d("MainViewModel", "Loading model: ${model.name}")
+        
+        // Validate model file exists
+        val modelFile = java.io.File(model.absolutePath)
+        if (!modelFile.exists() || !modelFile.isFile) {
+            _engineMessage.value = "Model file not found: ${model.name}"
+            _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
+                this[model.name] = ModelLoadStatus.Failed
+            }
+            return
+        }
+        
         viewModelScope.launch {
+            if (_isLoadingModel.value != null) {
+                Log.w("MainViewModel", "Load ignored: another model is already loading")
+                return@launch
+            }
             _engineMessage.value = null
             _isLoadingModel.value = model.name
-            _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Loading)
+            _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
+                this[model.name] = ModelLoadStatus.Loading
+                this.keys.filter { it != model.name }.forEach { key ->
+                    this[key] = if (_selectedModel.value?.name == key) ModelLoadStatus.Unloading else ModelLoadStatus.Idle
+                }
+            }
             try {
                 withContext(Dispatchers.IO) {
                     if (engine.isLoaded) engine.unload()
@@ -132,26 +177,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     engine.clearHistory()
                 }
                 _selectedModel.value = model
-                _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Success)
+                _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
+                    this[model.name] = ModelLoadStatus.Success
+                    this.keys.filter { it != model.name && this[it] == ModelLoadStatus.Unloading }.forEach {
+                        this[it] = ModelLoadStatus.Idle
+                    }
+                }
                 clearChat()
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Failed to load model: ${model.name}", e)
                 _selectedModel.value = null
                 _engineMessage.value = e.message ?: "Failed to load model"
-                _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Failed)
+                _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
+                    this[model.name] = ModelLoadStatus.Failed
+                    this.keys.filter { it != model.name && this[it] == ModelLoadStatus.Unloading }.forEach {
+                        this[it] = ModelLoadStatus.Idle
+                    }
+                }
             } finally {
                 _isLoadingModel.value = null
             }
         }
     }
 
-    fun unloadModel() {
+    fun unloadModel(model: LocalModel? = null) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { engine.unload() }
-            _selectedModel.value?.let { model ->
-                _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Idle)
+            val targetModel = model ?: _selectedModel.value
+            targetModel?.let { m ->
+                _modelLoadStatus.value = _modelLoadStatus.value + (m.name to ModelLoadStatus.Unloading)
             }
             _selectedModel.value = null
+            try {
+                withContext(Dispatchers.IO) { engine.unload() }
+            } finally {
+                targetModel?.let { m ->
+                    _modelLoadStatus.value = _modelLoadStatus.value + (m.name to ModelLoadStatus.Idle)
+                }
+            }
         }
     }
 
@@ -170,7 +232,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    manager.verify(model, isCancelled = { manager.isCancelled() })
+                    manager.verify(model, isCancelled = { rawManager.isCancelled() })
                 }
             } catch (e: Exception) {
                 _engineMessage.value = e.message ?: "Verification failed"
@@ -182,10 +244,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _pendingImageUri.value = uri
     }
 
+    /**
+     * Maximum prompt length in characters
+     */
+    private val maxPromptLength = 32000
+
+    /**
+     * Maximum message history to retain (prevents memory leaks)
+     */
+    private val maxMessageHistory = 200
+
     fun send(text: String) {
         val prompt = text.trim()
         val imageUri = _pendingImageUri.value
+        
+        // Validate input
         if (prompt.isEmpty() && imageUri == null) return
+        if (prompt.isNotEmpty() && prompt.length > maxPromptLength) {
+            _engineMessage.value = "Prompt exceeds maximum length of $maxPromptLength characters"
+            return
+        }
+        
         if (_isGenerating.value) {
             Log.w("MainViewModel", "send() called while generating, ignoring")
             return
@@ -204,7 +283,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         val assistantMessage =
             ChatMessage(messageId.incrementAndGet(), ChatRole.ASSISTANT, "", streaming = true)
-        _messages.update { it + userMessage + assistantMessage }
+        _messages.update { messages ->
+            val newMessages = messages + userMessage + assistantMessage
+            // Evict oldest messages if over limit to prevent memory leaks
+            if (newMessages.size > maxMessageHistory) {
+                newMessages.drop(newMessages.size - maxMessageHistory)
+            } else {
+                newMessages
+            }
+        }
         _pendingImageUri.value = null
         _isGenerating.value = true
 

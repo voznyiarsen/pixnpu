@@ -196,19 +196,20 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                             },
                             onClearImage = { vm.setPendingImage(null) },
                         )
-                        Screen.MODELS -> ModelSelectorScreen(
-                            models = models,
-                            downloadState = downloadState,
-                            selectedPath = selectedModel?.absolutePath,
-                            modelLoadStatus = emptyMap(),
-                            onLoad = vm::loadModel,
-                            onVerify = vm::verifyModel,
-                            onDelete = vm::deleteModel,
-                            onDownload = vm::downloadModel,
-                            onImport = vm::importModel,
-                            onPause = vm::pauseDownload,
-                            onCancelDownload = vm::cancelDownload,
-                        )
+                             Screen.MODELS -> ModelSelectorScreen(
+                                 models = models,
+                                 downloadState = downloadState,
+                                 selectedPath = selectedModel?.absolutePath,
+                                 modelLoadStatus = modelLoadStatus,
+                                 onLoad = vm::loadModel,
+                                 onUnload = vm::unloadModel,
+                                 onVerify = vm::verifyModel,
+                                 onDelete = vm::deleteModel,
+                                 onDownload = vm::downloadModel,
+                                 onImport = vm::importModel,
+                                 onPause = vm::pauseDownload,
+                                 onCancelDownload = vm::cancelDownload,
+                             )
                     }
                 }
             }

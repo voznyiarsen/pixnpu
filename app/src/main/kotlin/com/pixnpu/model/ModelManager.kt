@@ -3,9 +3,9 @@ package com.pixnpu.model
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
-import android.util.Log
 import android.os.StatFs
 import android.provider.OpenableColumns
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,14 +38,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import com.pixnpu.util.CircuitBreaker
 import com.pixnpu.util.Fmt
-
 /**
  * Manages local .litertlm model storage: resumable segmented downloads into app-private
  * storage, SHA-256 verification, SAF imports, and POSIX path resolution for direct mmap()
  * by the native engine.
  */
-class ModelManager(private val context: Context) {
+class ModelManager(private val context: Context) : ModelManagerInterface {
 
     private val modelsDir: File = File(context.filesDir, "models").apply { mkdirs() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -56,10 +57,14 @@ class ModelManager(private val context: Context) {
         .build()
 
     private val _models = MutableStateFlow<List<LocalModel>>(emptyList())
-    val models: StateFlow<List<LocalModel>> = _models.asStateFlow()
+    override val models: StateFlow<List<LocalModel>> = _models.asStateFlow()
 
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+    override val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+
+    // Circuit breakers for different operations
+    private val downloadCircuitBreaker = CircuitBreaker(maxFailures = 3, cooldownMs = 30000)
+    private val importCircuitBreaker = CircuitBreaker(maxFailures = 3, cooldownMs = 30000)
 
     private val stopRequested = AtomicBoolean(false)
     private var operationJob: Job? = null
@@ -68,37 +73,136 @@ class ModelManager(private val context: Context) {
         refresh()
     }
 
-    fun refresh() {
+    override fun refresh() {
         _models.value = scanModels()
     }
 
-    fun startDownload(url: String, expectedSha256: String?) {
+    override fun startDownload(url: String, expectedSha256: String?) {
+        try {
+            validateDownloadUrl(url, expectedSha256)
+        } catch (e: IllegalArgumentException) {
+            _downloadState.value = DownloadState.Failed("url", e.message ?: "Invalid URL")
+            return
+        }
+        
         if (operationJob?.isActive == true) {
             Log.w("ModelManager", "Download already in progress, ignoring start request")
             return
         }
+        if (!downloadCircuitBreaker.canExecute()) {
+            val state = downloadCircuitBreaker.getState()
+            Log.w("ModelManager", "Download circuit breaker is ${state.name}, ignoring request")
+            _downloadState.value = DownloadState.Failed(
+                "download",
+                "Too many download failures. Please wait before retrying."
+            )
+            return
+        }
         Log.d("ModelManager", "Starting download: $url")
-        val job = scope.launch { download(url, expectedSha256) }
+        val job = scope.launch {
+            try {
+                download(url, expectedSha256)
+                downloadCircuitBreaker.recordSuccess()
+            } catch (e: Exception) {
+                downloadCircuitBreaker.recordFailure()
+                throw e
+            }
+        }
         operationJob = job
     }
 
-    fun importModel(uri: Uri) {
+    /**
+     * Maximum URL length to prevent DoS
+     */
+    private val maxUrlLength = 2048
+
+    /**
+     * Maximum expected SHA-256 hash length (64 hex chars)
+     */
+    private val maxSha256Length = 64
+
+    /**
+     * Maximum model file size in bytes (10 GB)
+     */
+    private val maxModelSizeBytes = 10L * 1024 * 1024 * 1024
+
+    /**
+     * Minimum free space required in bytes (500 MB)
+     */
+    private val minFreeSpaceBytes = 500L * 1024 * 1024
+
+    /**
+     * Validate download URL and SHA-256 before starting download
+     */
+    private fun validateDownloadUrl(url: String, expectedSha256: String?) {
+        require(url.isNotBlank()) { "URL cannot be blank" }
+        require(url.length <= maxUrlLength) { "URL exceeds maximum length of $maxUrlLength characters" }
+        require(url.startsWith("http://") || url.startsWith("https://")) { "URL must start with http:// or https://" }
+        
+        // Validate SHA-256 if provided
+        expectedSha256?.let { sha ->
+            require(sha.isNotBlank()) { "SHA-256 hash cannot be blank" }
+            require(sha.length <= maxSha256Length) { "SHA-256 hash exceeds maximum length of $maxSha256Length characters" }
+            require(sha.matches(Regex("^[a-fA-F0-9]*$"))) { "SHA-256 hash contains invalid characters (must be hex)" }
+        }
+    }
+
+    /**
+     * Check if there's enough free space for a download
+     */
+    private fun hasEnoughFreeSpace(requiredBytes: Long): Boolean {
+        val stat = StatFs(modelsDir.absolutePath)
+        return stat.availableBytes >= requiredBytes + minFreeSpaceBytes
+    }
+
+    /**
+     * Validate model file size before import
+     */
+    private fun validateImportSize(fileSizeBytes: Long?) {
+        fileSizeBytes?.let { size ->
+            require(size <= maxModelSizeBytes) { 
+                "Model file exceeds maximum size of ${maxModelSizeBytes / (1024 * 1024 * 1024)} GB" 
+            }
+            require(hasEnoughFreeSpace(size)) { 
+                "Not enough free space. Need at least ${minFreeSpaceBytes / (1024 * 1024)} MB free." 
+            }
+        }
+    }
+
+    override fun importModel(uri: Uri) {
         if (operationJob?.isActive == true) {
             Log.w("ModelManager", "Operation already in progress, ignoring import request")
             return
         }
+        if (!importCircuitBreaker.canExecute()) {
+            val state = importCircuitBreaker.getState()
+            Log.w("ModelManager", "Import circuit breaker is ${state.name}, ignoring request")
+            _downloadState.value = DownloadState.Failed(
+                "import",
+                "Too many import failures. Please wait before retrying."
+            )
+            return
+        }
         Log.d("ModelManager", "Starting import: $uri")
-        val job = scope.launch { import(uri) }
+        val job = scope.launch {
+            try {
+                import(uri)
+                importCircuitBreaker.recordSuccess()
+            } catch (e: Exception) {
+                importCircuitBreaker.recordFailure()
+                throw e
+            }
+        }
         operationJob = job
     }
 
-    fun pause() {
+    override fun pause() {
         stopRequested.set(true)
     }
 
-    fun isCancelled(): Boolean = stopRequested.get()
+    override fun isCancelled(): Boolean = stopRequested.get()
 
-    fun cancel() {
+    override fun cancel() {
         stopRequested.set(true)
         scope.launch {
             operationJob?.cancelAndJoin()
@@ -120,7 +224,7 @@ class ModelManager(private val context: Context) {
         }
     }
 
-    fun delete(model: LocalModel): Boolean {
+    override fun delete(model: LocalModel): Boolean {
         val file = File(model.absolutePath)
         val deleted = file.delete()
         File(modelsDir, "${file.name}.sha256").delete()
@@ -133,7 +237,7 @@ class ModelManager(private val context: Context) {
         return deleted
     }
 
-    suspend fun verify(model: LocalModel, isCancelled: () -> Boolean = { false }): String? {
+    override suspend fun verify(model: LocalModel, isCancelled: () -> Boolean): String? {
         val file = File(model.absolutePath)
         val totalBytes = file.length()
         Log.d("ModelManager", "Verifying model: ${model.name} (${Fmt.bytes(totalBytes)})")
@@ -597,6 +701,15 @@ class ModelManager(private val context: Context) {
         }
         val totalBytes = resolver.openAssetFileDescriptor(uri, "r")?.length
             ?: querySize(resolver, uri)
+        
+        // Validate file size before starting import
+        try {
+            validateImportSize(totalBytes)
+        } catch (e: IllegalArgumentException) {
+            _downloadState.value = DownloadState.Failed(name, e.message ?: "File validation failed")
+            return
+        }
+        
         val tmpFile = File(modelsDir, "$name.importing")
         try {
             val digest = MessageDigest.getInstance("SHA-256")
@@ -716,8 +829,14 @@ class ModelManager(private val context: Context) {
     private fun hasSpaceFor(totalBytes: Long, existing: Long): Boolean {
         val need = totalBytes - existing
         if (need <= 0) return true
+        
+        // Check if total file size exceeds maximum
+        if (totalBytes > maxModelSizeBytes) {
+            return false
+        }
+        
         val stat = StatFs(modelsDir.absolutePath)
-        return stat.availableBytes >= need
+        return stat.availableBytes >= need + minFreeSpaceBytes
     }
 
     private fun loadBitmap(mapFile: File, size: Int): ByteArray {

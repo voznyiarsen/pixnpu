@@ -91,6 +91,7 @@ fun RuntimeStatusBar(
             active = stateActive,
         )
         StatusChip(label = "TTFT", value = metrics.ttftMs?.let { String.format(Locale.ROOT, "%.2fs", it / 1000.0) } ?: "—")
+        StatusChip(label = "warmup", value = metrics.warmupMs?.let { String.format(Locale.ROOT, "%.2fs", it / 1000.0) } ?: "—")
         StatusChip(label = "tok/s", value = String.format(Locale.ROOT, "%.1f", metrics.tokensPerSecond))
         StatusChip(label = "ctx", value = "${metrics.contextTokens}/${metrics.maxContextTokens}")
         StatusChip(label = "heap", value = "$heap MB")

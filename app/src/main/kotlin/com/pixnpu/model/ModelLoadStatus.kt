@@ -1,5 +1,5 @@
 package com.pixnpu.model
 
 enum class ModelLoadStatus {
-    Idle, Loading, Success, Failed
+    Idle, Loading, Unloading, Success, Failed
 }

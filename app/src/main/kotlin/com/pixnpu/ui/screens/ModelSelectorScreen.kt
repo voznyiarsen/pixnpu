@@ -3,15 +3,7 @@ package com.pixnpu.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,10 +17,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -52,41 +44,13 @@ import com.pixnpu.model.progress
 import com.pixnpu.util.Fmt
 
 @Composable
-private fun ShimmerOverlay() {
-    val transition = rememberInfiniteTransition(label = "shimmer")
-    val shimmerX by transition.animateFloat(
-        initialValue = -1f,
-        targetValue = 2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "shimmer",
-    )
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                brush = Brush.horizontalGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-                        Color.Transparent,
-                    ),
-                    startX = shimmerX * 100,
-                    endX = (shimmerX + 1) * 100,
-                ),
-            ),
-    )
-}
-
-@Composable
 fun ModelSelectorScreen(
     models: List<LocalModel>,
     downloadState: DownloadState,
     selectedPath: String?,
     modelLoadStatus: Map<String, ModelLoadStatus>,
     onLoad: (LocalModel) -> Unit,
+    onUnload: (LocalModel) -> Unit,
     onVerify: (LocalModel) -> Unit,
     onDelete: (LocalModel) -> Unit,
     onDownload: (String, String?) -> Unit,
@@ -161,6 +125,7 @@ fun ModelSelectorScreen(
                         selected = model.absolutePath == selectedPath,
                         loadStatus = modelLoadStatus[model.name] ?: ModelLoadStatus.Idle,
                         onLoad = { onLoad(model) },
+                        onUnload = { onUnload(model) },
                         onVerify = { onVerify(model) },
                         onDelete = { pendingDelete = model },
                     )
@@ -214,14 +179,17 @@ private fun ModelCard(
     selected: Boolean,
     loadStatus: ModelLoadStatus,
     onLoad: () -> Unit,
+    onUnload: () -> Unit,
     onVerify: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = when (loadStatus) {
-            ModelLoadStatus.Success -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-            ModelLoadStatus.Failed -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+            ModelLoadStatus.Success -> Color.Green.copy(alpha = 0.4f)
+            ModelLoadStatus.Failed -> Color.Red.copy(alpha = 0.4f)
+            ModelLoadStatus.Loading -> Color.Yellow.copy(alpha = 0.4f)
+            ModelLoadStatus.Unloading -> Color.Magenta.copy(alpha = 0.4f)
             else -> if (selected) {
                 MaterialTheme.colorScheme.secondaryContainer
             } else {
@@ -229,9 +197,8 @@ private fun ModelCard(
             }
         },
         modifier = Modifier.fillMaxWidth(),
-         ) {
-        Box {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = model.name,
@@ -264,31 +231,35 @@ private fun ModelCard(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
-                    onClick = onLoad,
-                    enabled = !selected && loadStatus != ModelLoadStatus.Loading,
+                    onClick = if (selected || loadStatus == ModelLoadStatus.Loading) onUnload else onLoad,
                     shape = RoundedCornerShape(20.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ),
                 ) {
-                    Text("Load")
+                    Text(if (selected || loadStatus == ModelLoadStatus.Loading) "Stop" else "Load")
                 }
                 OutlinedButton(
                     onClick = onVerify,
                     shape = RoundedCornerShape(20.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ),
                 ) {
                     Text("Verify", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 OutlinedButton(
                     onClick = onDelete,
                     shape = RoundedCornerShape(20.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ),
                 ) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             }
-            }
-        if (loadStatus == ModelLoadStatus.Loading) {
-            ShimmerOverlay()
         }
     }
-}
 }
 
 @Composable

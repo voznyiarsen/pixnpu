@@ -103,11 +103,51 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
    simulated word-by-word emission (8 ms per chunk).
 2. **functiongemma-270m-G5.litertlm warmup fails on NPU** on Pixel 10 Pro (this
    build) — `No dispatch library found in .../lib/arm64`. `gemma3-270m-it-q8`
-   works on NPU. See logcat line references in the design summary.
+   works on NPU. The load-time warmup in `LiteRTLMEngine` is **non-fatal**: it
+   logs `Warmup failed on NPU (continuing without warmup)` and the model stays
+   loaded; the first real prompt then fails through the normal generate() path.
+   See logcat line references in the design summary.
 3. **Single in-flight download/import** — `ModelManager` gates on one
    `operationJob`; pause/cancel reset to Idle.
 4. **No segmented retry on NPU dispatch failure** — NPU registration is
    all-or-nothing per model/backend.
+
+## Improvements Implemented
+
+### Stability
+- **Thread-safe engine state**: All state access in `LiteRTLMEngine` is now protected by mutex
+- **Circuit breakers**: Added for download and import operations to prevent repeated failures
+- **Input validation**: Added validation for prompts, URLs, SHA-256 hashes, and file sizes
+- **Resource leak prevention**: Bounded conversation history (50 turns) and message history (200 messages)
+
+### Maintainability
+- **Interfaces**: Extracted `ModelManagerInterface` and `LiteRTLMEngineInterface` for testability
+- **Dependency Injection**: Added `AppContainer` for DI, used in `MainViewModel`
+- **Documented constants**: Magic numbers replaced with named constants (maxPromptLength, maxUrlLength, etc.)
+
+### Testing
+- **Unit tests**: Added tests for `CircuitBreaker`, input validation, and existing utility functions
+- **Test coverage**: Core logic now has test coverage
+
+### Code Quality
+- **Error handling**: Consistent error handling with proper error messages
+- **Null safety**: Improved null checks and validation
+- **Separation of concerns**: Better separation between components
+
+### google-ai-edge/gallery practices (applied)
+- **Load-time warmup**: `LiteRTLMEngine.warmup()` runs one short inference
+  (`"Hi"`, `maxOutputToken = 1`) right after `initializeBackend()` so the
+  one-time NPU dispatch/kernel-compilation latency is absorbed at load, not at
+  the first user prompt. Non-fatal on failure (model stays loaded). Duration
+  surfaced as `warmupMs` in `InferenceMetrics` and the status bar. Mirrors
+  gallery's `generativeModel.warmup()` after model init.
+- **NPU uses no SamplerConfig**: On NPU, conversations are created with
+  `samplerConfig = null` (model defaults), exactly like gallery's
+  `LlmChatModelHelper` (`if (preferredBackend is Backend.NPU) null else
+  SamplerConfig(...)`). Custom temp/topK/topP are only applied on GPU/CPU.
+- **AutoCloseable `use {}`**: warmup conversation is closed via `use {}`.
+- **Graceful init failures**: backend/warmup errors are logged and handled
+  without crashing the process.
 
 ## Conventions
 
