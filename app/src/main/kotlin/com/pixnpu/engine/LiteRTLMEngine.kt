@@ -39,6 +39,8 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
     private var engine: Engine? = null
     private var conversation: Conversation? = null
     private var activeBackend: ActiveBackend? = null
+    private var activeSupportsVision: Boolean = false
+    private var activeSupportsAudio: Boolean = false
     private var currentParams: GenerationParams? = null
     private var currentSystemPrompt: String = ""
     
@@ -61,25 +63,50 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
 
     override val isLoaded: Boolean get() = engine?.isInitialized() == true
 
+    /**
+     * Multimodal capability of the currently-loaded model, detected by which
+     * vision/audio backend variant survived initialization. Non-textual inputs
+     * are only offered to models that loaded successfully with the matching
+     * backend (mirrors gallery's `model.llmSupportImage`/`supportAudio` from
+     * the allowlist — we probe at load time since user-imported models carry no
+     * metadata).
+     */
+    val supportsVision: Boolean get() = threadSafe { activeSupportsVision }
+    val supportsAudio: Boolean get() = threadSafe { activeSupportsAudio }
+
+    private fun <T> threadSafe(block: () -> T): T {
+        val locked = mutex.tryLock()
+        return if (locked) {
+            try { block() } finally { mutex.unlock() }
+        } else {
+            block()
+        }
+    }
+
     override suspend fun load(modelPath: String, params: GenerationParams): ActiveBackend =
         mutex.withLock {
             Log.d("LiteRTLMEngine", "Loading model: $modelPath")
             releaseConversation()
             unloadEngine()
             conversationHistory.clear()
-            val candidate = initializeBackend(modelPath, params)
-            activeBackend = candidate
+            val init = initializeBackend(modelPath, params)
+            activeBackend = init.backend
+            activeSupportsVision = init.supportsVision
+            activeSupportsAudio = init.supportsAudio
             currentParams = params
             currentSystemPrompt = ""
             conversation = createNewConversation(params, "")
-            warmup(candidate)
+            warmup(init.backend)
             _metrics.value = _metrics.value.copy(
                 status = EngineStatus.Ready,
-                backend = candidate.label,
+                backend = init.backend.label,
                 maxContextTokens = params.contextTokens,
+                supportsVision = init.supportsVision,
+                supportsAudio = init.supportsAudio,
             )
-            Log.d("LiteRTLMEngine", "Model loaded on backend: ${candidate.label}")
-            candidate
+            Log.d("LiteRTLMEngine", "Model loaded on backend: ${init.backend.label} " +
+                "(vision=${init.supportsVision}, audio=${init.supportsAudio})")
+            init.backend
         }
 
     override suspend fun reconfigure(params: GenerationParams, systemPrompt: String): Unit = mutex.withLock {
@@ -368,7 +395,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
         }
     }
 
-    private suspend fun initializeBackend(modelPath: String, params: GenerationParams): ActiveBackend {
+    private suspend fun initializeBackend(modelPath: String, params: GenerationParams): InitResult {
         val candidates = listOf(
             ActiveBackend.NPU,
             ActiveBackend.GPU,
@@ -391,7 +418,8 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                 // Audio modules must run on CPU, vision on GPU (gallery practice for
                 // Gemma 3n). Some models lack audio and/or vision support and their
                 // initialization fails when the corresponding backend is requested, so
-                // try progressively leaner variants until one initializes.
+                // try progressively leaner variants until one initializes. The variant
+                // that succeeds tells us which modalities the model actually supports.
                 val variants = listOf(
                     Triple("audio+vision", true, true),
                     Triple("audio only", true, false),
@@ -412,7 +440,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                         candidateEngine.initialize()
                         engine = candidateEngine
                         Log.d("LiteRTLMEngine", "Backend ${candidate.label} initialized (${label})")
-                        return candidate
+                        return InitResult(candidate, withVision, withAudio)
                     } catch (e: Exception) {
                         Log.w("LiteRTLMEngine", "Backend ${candidate.label} init failed (${label}): ${e.message}")
                         try { candidateEngine.close() } catch (_: Exception) { }
@@ -429,6 +457,12 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
             "Failed to initialize any backend (NPU/GPU/CPU): ${lastError?.message}",
         )
     }
+
+    private data class InitResult(
+        val backend: ActiveBackend,
+        val supportsVision: Boolean,
+        val supportsAudio: Boolean,
+    )
 
     /**
      * Runs a single short inference right after load to trigger backend dispatch
@@ -515,17 +549,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
     }
 
     private fun safeTokenCount(): Int {
-        val conv = mutex.tryLock().let { locked ->
-            if (locked) {
-                try {
-                    conversation
-                } finally {
-                    mutex.unlock()
-                }
-            } else {
-                conversation
-            }
-        }
+        val conv = threadSafe { conversation }
         return try {
             conv?.getTokenCount() ?: 0
         } catch (e: Exception) {

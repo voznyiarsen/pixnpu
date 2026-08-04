@@ -104,6 +104,8 @@ fun InferenceScreen(
     engineMessage: String?,
     pendingImageUri: Uri?,
     pendingAudio: AudioClip?,
+    supportsVision: Boolean = true,
+    supportsAudio: Boolean = true,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
@@ -229,6 +231,8 @@ fun InferenceScreen(
             isRecording = isRecording,
             pendingImageUri = pendingImageUri,
             pendingAudio = pendingAudio,
+            supportsVision = supportsVision,
+            supportsAudio = supportsAudio,
             onValueChange = { input = it },
             onSend = {
                 if (input.isNotBlank() || pendingImageUri != null || pendingAudio != null) {
@@ -250,37 +254,47 @@ fun InferenceScreen(
 
     if (showAttachSheet) {
         ModalBottomSheet(onDismissRequest = { showAttachSheet = false }) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 28.dp)
-                    .padding(bottom = 36.dp),
-                horizontalArrangement = Arrangement.spacedBy(32.dp),
-            ) {
-                AttachOption(
-                    icon = Icons.Outlined.PhotoLibrary,
-                    label = "Gallery",
-                    onClick = {
+            val options = buildList {
+                if (supportsVision) {
+                    add(AttachOptionSpec(Icons.Outlined.PhotoLibrary, "Gallery") {
                         showAttachSheet = false
                         onPickImage()
-                    },
-                )
-                AttachOption(
-                    icon = Icons.Outlined.Mic,
-                    label = "Audio",
-                    onClick = {
+                    })
+                }
+                if (supportsAudio) {
+                    add(AttachOptionSpec(Icons.Outlined.Mic, "Audio") {
                         showAttachSheet = false
                         startRecording()
-                    },
-                )
-                AttachOption(
-                    icon = Icons.Outlined.AudioFile,
-                    label = "Audio file",
-                    onClick = {
+                    })
+                    add(AttachOptionSpec(Icons.Outlined.AudioFile, "Audio file") {
                         showAttachSheet = false
                         audioFileLauncher.launch(arrayOf("audio/*"))
-                    },
+                    })
+                }
+            }
+            if (options.isEmpty()) {
+                Text(
+                    "This model only supports text input",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(24.dp),
                 )
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 28.dp)
+                        .padding(bottom = 36.dp),
+                    horizontalArrangement = Arrangement.spacedBy(32.dp),
+                ) {
+                    options.forEach { spec ->
+                        AttachOption(
+                            icon = spec.icon,
+                            label = spec.label,
+                            onClick = spec.onClick,
+                        )
+                    }
+                }
             }
         }
     }
@@ -421,6 +435,8 @@ private fun InputBar(
     isRecording: Boolean,
     pendingImageUri: Uri?,
     pendingAudio: AudioClip?,
+    supportsVision: Boolean = true,
+    supportsAudio: Boolean = true,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -483,10 +499,11 @@ private fun InputBar(
                 }
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+             Row(verticalAlignment = Alignment.CenterVertically) {
+                val canAttach = supportsVision || supportsAudio
                 IconButton(
                     onClick = onAttachClick,
-                    enabled = !isRecording,
+                    enabled = canAttach && !isRecording,
                     modifier = Modifier.size(56.dp),
                 ) {
                     Icon(
@@ -618,6 +635,12 @@ private fun AudioClipChip(
         )
     }
 }
+
+private data class AttachOptionSpec(
+    val icon: ImageVector,
+    val label: String,
+    val onClick: () -> Unit,
+)
 
 @Composable
 private fun AttachOption(

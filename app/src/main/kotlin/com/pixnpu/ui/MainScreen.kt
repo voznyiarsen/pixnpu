@@ -196,8 +196,10 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
                             },
-                            onClearImage = { vm.setPendingImage(null) },
+                             onClearImage = { vm.setPendingImage(null) },
                             onSetAudio = { vm.setPendingAudio(it) },
+                            supportsVision = metrics.supportsVision,
+                            supportsAudio = metrics.supportsAudio,
                         )
                              Screen.MODELS -> ModelSelectorScreen(
                                  models = models,
