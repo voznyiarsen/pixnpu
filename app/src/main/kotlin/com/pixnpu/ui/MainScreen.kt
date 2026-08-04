@@ -77,6 +77,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val metrics by vm.metrics.collectAsStateWithLifecycle()
     val pendingImageUri by vm.pendingImageUri.collectAsStateWithLifecycle()
     val pendingAudio by vm.pendingAudio.collectAsStateWithLifecycle()
+    val selectedModality by vm.selectedModality.collectAsStateWithLifecycle()
 
     var tab by remember { mutableStateOf(Screen.CHAT) }
     var showParams by remember { mutableStateOf(false) }
@@ -206,7 +207,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  downloadState = downloadState,
                                  selectedPath = selectedModel?.absolutePath,
                                  modelLoadStatus = modelLoadStatus,
-                                 onLoad = vm::loadModel,
+                                 onLoad = { model, mod -> vm.loadModel(model, mod) },
                                  onUnload = vm::unloadModel,
                                  onVerify = vm::verifyModel,
                                  onDelete = vm::deleteModel,
@@ -214,6 +215,8 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  onImport = vm::importModel,
                                  onPause = vm::pauseDownload,
                                  onCancelDownload = vm::cancelDownload,
+                                 selectedModality = selectedModality,
+                                 onModalityChange = vm::setSelectedModality,
                              )
                     }
                 }

@@ -1,5 +1,6 @@
 package com.pixnpu.engine
 
+import com.pixnpu.engine.Modality
 import com.google.ai.edge.litertlm.Content
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,13 +20,14 @@ interface LiteRTLMEngineInterface {
      */
     val isLoaded: Boolean
     
-    /**
-     * Load a model from the given path with the specified parameters
-     * @param modelPath The path to the .litertlm model file
-     * @param params The generation parameters to use
-     * @return The active backend that was used for loading
-     */
-    suspend fun load(modelPath: String, params: GenerationParams): ActiveBackend
+     /**
+      * Load a model from the given path with the specified parameters and input modality.
+      * @param modelPath The path to the .litertlm model file
+      * @param params The generation parameters to use
+      * @param modality The user-chosen input modality (text/audio/vision/audio+vision)
+      * @return The active backend that was used for loading
+      */
+     suspend fun load(modelPath: String, params: GenerationParams, modality: Modality = Modality.TextOnly): ActiveBackend
     
     /**
      * Reconfigure the engine with new parameters and system prompt

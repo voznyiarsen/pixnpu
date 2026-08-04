@@ -10,18 +10,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -36,7 +39,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.pixnpu.engine.Modality
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelLoadStatus
@@ -49,14 +54,16 @@ fun ModelSelectorScreen(
     downloadState: DownloadState,
     selectedPath: String?,
     modelLoadStatus: Map<String, ModelLoadStatus>,
-    onLoad: (LocalModel) -> Unit,
+    onLoad: (LocalModel, Modality) -> Unit,
     onUnload: (LocalModel) -> Unit,
     onVerify: (LocalModel) -> Unit,
     onDelete: (LocalModel) -> Unit,
-    onDownload: (String, String?) -> Unit,
-    onImport: (Uri) -> Unit,
-    onPause: () -> Unit,
-    onCancelDownload: () -> Unit,
+     onDownload: (String, String?) -> Unit,
+     onImport: (Uri) -> Unit,
+     onPause: () -> Unit,
+     onCancelDownload: () -> Unit,
+     selectedModality: Modality,
+     onModalityChange: (Modality) -> Unit,
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<LocalModel?>(null) }
@@ -121,14 +128,16 @@ fun ModelSelectorScreen(
              LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(models, key = { it.name }) { model ->
                     ModelCard(
-                        model = model,
-                        selected = model.absolutePath == selectedPath,
-                        loadStatus = modelLoadStatus[model.name] ?: ModelLoadStatus.Idle,
-                        onLoad = { onLoad(model) },
-                        onUnload = { onUnload(model) },
-                        onVerify = { onVerify(model) },
-                        onDelete = { pendingDelete = model },
-                    )
+                         model = model,
+                         selected = model.absolutePath == selectedPath,
+                         loadStatus = modelLoadStatus[model.name] ?: ModelLoadStatus.Idle,
+                         selectedModality = selectedModality,
+                         onModalityChange = onModalityChange,
+                         onLoad = { onLoad(model, selectedModality) },
+                         onUnload = { onUnload(model) },
+                         onVerify = { onVerify(model) },
+                         onDelete = { pendingDelete = model },
+                     )
                 }
             }
         }
@@ -178,7 +187,9 @@ private fun ModelCard(
     model: LocalModel,
     selected: Boolean,
     loadStatus: ModelLoadStatus,
-    onLoad: () -> Unit,
+    selectedModality: Modality,
+    onModalityChange: (Modality) -> Unit,
+    onLoad: (Modality) -> Unit,
     onUnload: () -> Unit,
     onVerify: () -> Unit,
     onDelete: () -> Unit,
@@ -230,8 +241,12 @@ private fun ModelCard(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModalityMenu(
+                    selectedModality = selectedModality,
+                    onModalityChange = onModalityChange,
+                )
                 OutlinedButton(
-                    onClick = if (selected || loadStatus == ModelLoadStatus.Loading) onUnload else onLoad,
+                    onClick = { onLoad(selectedModality) },
                     shape = RoundedCornerShape(20.dp),
                     colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -257,6 +272,42 @@ private fun ModelCard(
                 ) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModalityMenu(
+    selectedModality: Modality,
+    onModalityChange: (Modality) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        Text(
+            text = selectedModality.label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            maxLines = 1,
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            Modality.entries.forEach { modality ->
+                DropdownMenuItem(
+                    onClick = {
+                        onModalityChange(modality)
+                        expanded = false
+                    },
+                    text = { Text(modality.label) },
+                )
             }
         }
     }

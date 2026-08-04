@@ -17,6 +17,7 @@ import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelLoadStatus
 import com.pixnpu.model.ModelManager
 import com.pixnpu.model.ModelManagerInterface
+import com.pixnpu.engine.Modality
 import com.pixnpu.ui.components.pcm16ToWav
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
@@ -148,8 +149,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         manager.cancel()
     }
 
-    fun loadModel(model: LocalModel) {
-        Log.d("MainViewModel", "Loading model: ${model.name}")
+     private val _selectedModality = MutableStateFlow(Modality.TextOnly)
+     val selectedModality: StateFlow<Modality> = _selectedModality.asStateFlow()
+
+     fun setSelectedModality(modality: Modality) {
+         _selectedModality.value = modality
+     }
+
+     fun loadModel(model: LocalModel, modality: Modality = _selectedModality.value) {
+Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         
         // Validate model file exists
         val modelFile = java.io.File(model.absolutePath)
@@ -177,7 +185,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 withContext(Dispatchers.IO) {
                     if (engine.isLoaded) engine.unload()
-                    engine.load(model.absolutePath, _params.value)
+                    engine.load(model.absolutePath, _params.value, modality)
                     engine.clearHistory()
                 }
                 _selectedModel.value = model
