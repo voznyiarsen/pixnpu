@@ -1,6 +1,7 @@
 package com.pixnpu.ui
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -29,10 +30,13 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,6 +47,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val container = AppContainer(application)
     private val manager: ModelManagerInterface = container.modelManager
     private val engine: LiteRTLMEngineInterface = container.engine
+
+    // Persisted settings (see SettingsSheet in the UI)
+    private val prefs =
+        application.getSharedPreferences("pixnpu_settings", Context.MODE_PRIVATE)
+
+    private val _apiPort = MutableStateFlow(
+        prefs.getInt("api_port", OpenAiApiServer.PORT),
+    )
+    val apiPort: StateFlow<Int> = _apiPort.asStateFlow()
+
+    private val _keepScreenOn = MutableStateFlow(prefs.getBoolean("keep_screen_on", false))
+    val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
     
     // Keep references to concrete implementations for cases where interface isn't sufficient
     private val rawManager: ModelManager = container.rawModelManager
@@ -91,13 +107,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _apiServerEnabled = MutableStateFlow(false)
     val apiServerEnabled: StateFlow<Boolean> = _apiServerEnabled.asStateFlow()
 
-    val apiServerUrl: String = "http://${OpenAiApiServer.HOST}:${OpenAiApiServer.PORT}"
+    val apiServerUrl: StateFlow<String> = _apiPort
+        .map { "http://${OpenAiApiServer.HOST}:$it" }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "http://${OpenAiApiServer.HOST}:${OpenAiApiServer.PORT}")
 
     private var generationJob: Job? = null
     private var apiServerJob: Job? = null
     private val messageId = AtomicLong(0)
 
+    private val _selectedModality = MutableStateFlow(Modality.TextOnly)
+    val selectedModality: StateFlow<Modality> = _selectedModality.asStateFlow()
+
     init {
+        _selectedModality.value = prefs.getString("modality", null)
+            ?.let { name -> runCatching { Modality.valueOf(name) }.getOrNull() }
+            ?: Modality.TextOnly
+        _params.value = GenerationParams(
+            temperature = prefs.getFloat("param_temperature", GenerationParams().temperature),
+            topK = prefs.getInt("param_topK", GenerationParams().topK),
+            topP = prefs.getFloat("param_topP", GenerationParams().topP),
+            maxTokens = prefs.getInt("param_maxTokens", GenerationParams().maxTokens),
+            contextTokens = prefs.getInt("param_contextTokens", GenerationParams().contextTokens),
+        )
+        _systemPrompt.value = prefs.getString("system_prompt", "") ?: ""
+        _template.value = prefs.getString("template", null)
+            ?.let { name -> runCatching { PromptTemplate.valueOf(name) }.getOrNull() }
+            ?: PromptTemplate.Auto
         startReconfigWatcher()
     }
 
@@ -116,14 +151,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateParams(params: GenerationParams) {
         _params.value = params
+        prefs.edit()
+            .putFloat("param_temperature", params.temperature)
+            .putInt("param_topK", params.topK)
+            .putFloat("param_topP", params.topP)
+            .putInt("param_maxTokens", params.maxTokens)
+            .putInt("param_contextTokens", params.contextTokens)
+            .apply()
     }
 
     fun updateSystemPrompt(value: String) {
         _systemPrompt.value = value
+        prefs.edit().putString("system_prompt", value).apply()
     }
 
     fun setTemplate(template: PromptTemplate) {
         _template.value = template
+        prefs.edit().putString("template", template.name).apply()
     }
 
     /**
@@ -159,11 +203,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         manager.cancel()
     }
 
-     private val _selectedModality = MutableStateFlow(Modality.TextOnly)
-     val selectedModality: StateFlow<Modality> = _selectedModality.asStateFlow()
-
     fun setSelectedModality(modality: Modality) {
         _selectedModality.value = modality
+        prefs.edit().putString("modality", modality.name).apply()
+    }
+
+    fun setApiPort(port: Int) {
+        val clamped = port.coerceIn(OpenAiApiServer.MIN_PORT, OpenAiApiServer.MAX_PORT)
+        if (clamped == _apiPort.value) return
+        _apiPort.value = clamped
+        prefs.edit().putInt("api_port", clamped).apply()
+        if (_apiServerEnabled.value) {
+            // A running server keeps its original port; stop it so the change applies.
+            apiServerJob?.cancel()
+            apiServerJob = viewModelScope.launch {
+                withContext(Dispatchers.IO) { container.openAiApiServer.stop() }
+                _apiServerEnabled.value = false
+                _engineMessage.value = "API server stopped — port changed to $clamped"
+            }
+        }
+    }
+
+    fun setKeepScreenOn(enabled: Boolean) {
+        _keepScreenOn.value = enabled
+        prefs.edit().putBoolean("keep_screen_on", enabled).apply()
     }
 
     /**
@@ -189,7 +252,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             apiServerJob?.cancel()
             apiServerJob = viewModelScope.launch {
-                withContext(Dispatchers.IO) { container.openAiApiServer.start() }
+                withContext(Dispatchers.IO) { container.openAiApiServer.start(_apiPort.value) }
                 _apiServerEnabled.value = true
             }
         }

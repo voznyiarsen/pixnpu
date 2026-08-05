@@ -54,6 +54,8 @@ class OpenAiApiServer(
         /** Loopback only — never reachable from the network. */
         const val HOST = "127.0.0.1"
         const val PORT = 8080
+        const val MIN_PORT = 1024
+        const val MAX_PORT = 65535
     }
 
     /**
@@ -68,19 +70,20 @@ class OpenAiApiServer(
     val isRunning: Boolean get() = server != null
 
     /**
-     * Starts the server. Blocks until startup completes; call from Dispatchers.IO.
+     * Starts the server on the given port. Blocks until startup completes;
+     * call from Dispatchers.IO.
      */
-    fun start() {
+    fun start(port: Int = PORT) {
         if (server != null) {
             Log.w(TAG, "start() called while already running")
             return
         }
-        val instance = embeddedServer(CIO, host = HOST, port = PORT) {
+        val instance = embeddedServer(CIO, host = HOST, port = port) {
             openAiApiModule(engine, context, modelIdProvider = { currentModelId.get() })
         }
         server = instance
         instance.start(wait = false)
-        Log.i(TAG, "API server listening on http://$HOST:$PORT")
+        Log.i(TAG, "API server listening on http://$HOST:$port")
     }
 
     /**

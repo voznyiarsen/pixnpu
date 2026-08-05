@@ -4,19 +4,29 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
@@ -25,9 +35,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -46,14 +59,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.keepScreenOn
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.pixnpu.ui.components.ParameterSheet
 import com.pixnpu.ui.components.RuntimeStatusBar
+import com.pixnpu.ui.components.SettingsSheet
 import com.pixnpu.ui.screens.InferenceScreen
 import com.pixnpu.ui.screens.ModelSelectorScreen
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 enum class Screen(val label: String, val selectedIcon: ImageVector, val unselectedIcon: ImageVector) {
@@ -81,8 +100,13 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val pendingTextFile by vm.pendingTextFile.collectAsStateWithLifecycle()
     val selectedModality by vm.selectedModality.collectAsStateWithLifecycle()
     val apiServerEnabled by vm.apiServerEnabled.collectAsStateWithLifecycle()
+    val apiPort by vm.apiPort.collectAsStateWithLifecycle()
+    val apiServerUrl by vm.apiServerUrl.collectAsStateWithLifecycle()
+    val keepScreenOn by vm.keepScreenOn.collectAsStateWithLifecycle()
 
-    var showParams by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var tabRowHeight by remember { mutableStateOf(56.dp) }
+    val density = LocalDensity.current
     val imeVisible = WindowInsets.isImeVisible
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(pageCount = { Screen.entries.size })
@@ -108,7 +132,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                         )
                         if (apiServerEnabled) {
                             Text(
-                                text = vm.apiServerUrl,
+                                text = apiServerUrl,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                             )
@@ -116,17 +140,14 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                     }
                 },
                 actions = {
-                    TextButton(onClick = { showParams = true }) {
-                        Text("Params", color = MaterialTheme.colorScheme.primary)
-                    }
-                    TextButton(
-                        onClick = vm::toggleApiServer,
-                        enabled = apiServerEnabled || selectedModel != null,
-                    ) {
-                        Text(
-                            text = if (apiServerEnabled) "API: On" else "API",
-                            color = MaterialTheme.colorScheme.primary,
+                    TextButton(onClick = { showSettings = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
                         )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Settings", color = MaterialTheme.colorScheme.primary)
                     }
                     TextButton(
                         onClick = { vm.clearChat() },
@@ -152,37 +173,38 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                         tonalElevation = 6.dp,
                         shadowElevation = 4.dp,
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .padding(horizontal = 8.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        Box(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.CenterStart,
                         ) {
-                            Screen.entries.forEach { screen ->
-                                val selected = currentTab == screen
-                                Column(
-                                    modifier = Modifier
-                                        .width(110.dp)
-                                        .clip(RoundedCornerShape(36.dp))
-                                        .background(
-                                            if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                                        )
-                                        .clickable {
+                            // Sliding pill: tracks the pager so it glides between
+                            // buttons on swipe and animates on tab clicks.
+                            val stepPx = with(LocalDensity.current) { (TabWidth + TabSpacing).toPx() }
+                            val progress = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+                                .coerceIn(0f, 1f)
+                            Box(
+                                modifier = Modifier
+                                    .offset { IntOffset((progress * stepPx).roundToInt(), 0) }
+                                    .width(TabWidth)
+                                    .height(tabRowHeight)
+                                    .clip(RoundedCornerShape(36.dp))
+                                    .background(MaterialTheme.colorScheme.secondaryContainer),
+                            )
+                            Row(
+                                modifier = Modifier.onSizeChanged { size ->
+                                    tabRowHeight = with(density) { size.height.toDp() }
+                                },
+                                horizontalArrangement = Arrangement.spacedBy(TabSpacing),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Screen.entries.forEach { screen ->
+                                    val selected = currentTab == screen
+                                    NavTabButton(
+                                        screen = screen,
+                                        selected = selected,
+                                        onClick = {
                                             scope.launch { pagerState.animateScrollToPage(screen.ordinal) }
-                                        }
-                                        .padding(vertical = 8.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                ) {
-                                    Icon(
-                                        imageVector = if (selected) screen.selectedIcon else screen.unselectedIcon,
-                                        contentDescription = screen.label,
-                                        tint = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    Text(
-                                        text = screen.label,
-                                        color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        style = MaterialTheme.typography.labelSmall,
+                                        },
                                     )
                                 }
                             }
@@ -196,6 +218,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
             Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .then(if (keepScreenOn) Modifier.keepScreenOn() else Modifier)
         ) {
             RuntimeStatusBar(
                 metrics = metrics,
@@ -249,16 +272,78 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
         }
     }
 
-    if (showParams) {
-        ParameterSheet(
+    if (showSettings) {
+        SettingsSheet(
             params = params,
             systemPrompt = systemPrompt,
             template = template,
+            modality = selectedModality,
             isGenerating = isGenerating,
+            apiServerEnabled = apiServerEnabled,
+            apiPort = apiPort,
+            apiServerUrl = apiServerUrl,
+            keepScreenOn = keepScreenOn,
             onChangeParams = vm::updateParams,
             onChangeSystemPrompt = vm::updateSystemPrompt,
             onChangeTemplate = vm::setTemplate,
-            onDismiss = { showParams = false },
+            onModalityChange = vm::setSelectedModality,
+            onToggleApiServer = vm::toggleApiServer,
+            onApiPortChange = vm::setApiPort,
+            onKeepScreenOnChange = vm::setKeepScreenOn,
+            onDismiss = { showSettings = false },
+        )
+    }
+}
+
+private val TabWidth = 110.dp
+private val TabSpacing = 12.dp
+
+/**
+ * Single bottom-nav button. Colors animate with selection, the icon crossfades
+ * between the outlined and filled variants and scales up slightly when the
+ * button becomes the active tab.
+ */
+@Composable
+private fun NavTabButton(
+    screen: Screen,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val onPill = MaterialTheme.colorScheme.onSecondaryContainer
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val tint by animateColorAsState(if (selected) onPill else muted, label = "navTint")
+    val iconScale by animateFloatAsState(
+        targetValue = if (selected) 1f else 0.82f,
+        label = "navIconScale",
+    )
+    Column(
+        modifier = Modifier
+            .width(TabWidth)
+            .clip(RoundedCornerShape(36.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        AnimatedContent(
+            targetState = selected,
+            transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+            label = "navIcon",
+        ) { isSelected ->
+            Icon(
+                imageVector = if (isSelected) screen.selectedIcon else screen.unselectedIcon,
+                contentDescription = screen.label,
+                tint = tint,
+                modifier = Modifier.graphicsLayer {
+                    scaleX = iconScale
+                    scaleY = iconScale
+                },
+            )
+        }
+        Text(
+            text = screen.label,
+            color = tint,
+            style = MaterialTheme.typography.labelSmall,
         )
     }
 }
