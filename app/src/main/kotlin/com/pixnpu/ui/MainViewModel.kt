@@ -35,7 +35,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -56,6 +55,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.getInt("api_port", OpenAiApiServer.PORT),
     )
     val apiPort: StateFlow<Int> = _apiPort.asStateFlow()
+
+    private val _apiHost = MutableStateFlow(
+        prefs.getString("api_host", OpenAiApiServer.HOST) ?: OpenAiApiServer.HOST,
+    )
+    val apiHost: StateFlow<String> = _apiHost.asStateFlow()
 
     private val _keepScreenOn = MutableStateFlow(prefs.getBoolean("keep_screen_on", false))
     val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
@@ -107,8 +111,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _apiServerEnabled = MutableStateFlow(false)
     val apiServerEnabled: StateFlow<Boolean> = _apiServerEnabled.asStateFlow()
 
-    val apiServerUrl: StateFlow<String> = _apiPort
-        .map { "http://${OpenAiApiServer.HOST}:$it" }
+    val apiServerUrl: StateFlow<String> = _apiHost
+        .combine(_apiPort) { host, port -> "http://$host:$port" }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "http://${OpenAiApiServer.HOST}:${OpenAiApiServer.PORT}")
 
     private var generationJob: Job? = null
@@ -224,6 +228,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setApiHost(host: String) {
+        val trimmed = host.trim()
+        if (trimmed.isEmpty() || trimmed == _apiHost.value) return
+        _apiHost.value = trimmed
+        prefs.edit().putString("api_host", trimmed).apply()
+        if (_apiServerEnabled.value) {
+            // A running server keeps its original bind address; stop it so the change applies.
+            apiServerJob?.cancel()
+            apiServerJob = viewModelScope.launch {
+                withContext(Dispatchers.IO) { container.openAiApiServer.stop() }
+                _apiServerEnabled.value = false
+                _engineMessage.value = "API server stopped — bind host changed to $trimmed"
+            }
+        }
+    }
+
     fun setKeepScreenOn(enabled: Boolean) {
         _keepScreenOn.value = enabled
         prefs.edit().putBoolean("keep_screen_on", enabled).apply()
@@ -252,7 +272,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             apiServerJob?.cancel()
             apiServerJob = viewModelScope.launch {
-                withContext(Dispatchers.IO) { container.openAiApiServer.start(_apiPort.value) }
+                withContext(Dispatchers.IO) { container.openAiApiServer.start(_apiHost.value, _apiPort.value) }
                 _apiServerEnabled.value = true
             }
         }

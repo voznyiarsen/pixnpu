@@ -1,10 +1,11 @@
-package com.pixnpu.ui.components
+package com.pixnpu.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -23,7 +24,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -44,21 +44,23 @@ import com.pixnpu.BuildConfig
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.Modality
 import com.pixnpu.engine.PromptTemplate
+import com.pixnpu.server.OpenAiApiServer
 import java.util.Locale
 
 /**
- * Settings bottom sheet: API server, multimodal input, generation params and
- * misc toggles. All values bind directly to MainViewModel StateFlows.
+ * Settings screen (pager tab): API server bind host/port, multimodal input,
+ * generation params and misc toggles. All values bind directly to
+ * MainViewModel StateFlows.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsSheet(
+fun SettingsScreen(
     params: GenerationParams,
     systemPrompt: String,
     template: PromptTemplate,
     modality: Modality,
     isGenerating: Boolean,
     apiServerEnabled: Boolean,
+    apiHost: String,
     apiPort: Int,
     apiServerUrl: String,
     keepScreenOn: Boolean,
@@ -67,44 +69,53 @@ fun SettingsSheet(
     onChangeTemplate: (PromptTemplate) -> Unit,
     onModalityChange: (Modality) -> Unit,
     onToggleApiServer: () -> Unit,
+    onApiHostChange: (String) -> Unit,
     onApiPortChange: (Int) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit,
-    onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                text = "Settings",
-                style = MaterialTheme.typography.titleLarge,
-            )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = "Settings",
+            style = MaterialTheme.typography.titleLarge,
+        )
 
-            SectionHeader("API Server")
-            ToggleRow(
-                title = "API Server",
-                subtitle = if (apiServerEnabled) {
-                    "Running · $apiServerUrl"
-                } else {
-                    "Off — binds 127.0.0.1 only, never on the network"
-                },
-                checked = apiServerEnabled,
-                onCheckedChange = { onToggleApiServer() },
-            )
-            PortRow(
-                port = apiPort,
-                onPortChange = onApiPortChange,
-            )
+        SectionHeader("API Server")
+        ToggleRow(
+            title = "API Server",
+            subtitle = if (apiServerEnabled) {
+                "Running · $apiServerUrl"
+            } else {
+                "Off — loopback only by default"
+            },
+            checked = apiServerEnabled,
+            onCheckedChange = { onToggleApiServer() },
+        )
+        BindAddressRow(
+            host = apiHost,
+            port = apiPort,
+            onHostChange = onApiHostChange,
+            onPortChange = onApiPortChange,
+        )
+        if (!OpenAiApiServer.isLoopback(apiHost)) {
             Text(
-                text = "Endpoints: GET /v1/models · POST /v1/chat/completions",
+                text = "Bound to $apiHost — reachable from your network. There is no auth, " +
+                    "so only expose it on trusted networks.",
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.error,
             )
+        }
+        Text(
+            text = "Endpoints: GET /v1/models · POST /v1/chat/completions",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
             SectionHeader("Multimodal Input")
             Row(
@@ -160,7 +171,6 @@ fun SettingsSheet(
             }
             Spacer(Modifier.height(8.dp))
         }
-    }
 }
 
 @Composable
@@ -201,24 +211,34 @@ private fun ToggleRow(
 }
 
 @Composable
-private fun PortRow(
+private fun BindAddressRow(
+    host: String,
     port: Int,
+    onHostChange: (String) -> Unit,
     onPortChange: (Int) -> Unit,
 ) {
     var portText by remember(port) { mutableStateOf(port.toString()) }
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Port", style = MaterialTheme.typography.bodyLarge)
+            OutlinedTextField(
+                value = host,
+                onValueChange = { onHostChange(it) },
+                label = { Text("Bind Host") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
             Text(
-                text = "Changing the port stops the server",
-                style = MaterialTheme.typography.bodySmall,
+                text = "IP to listen on (e.g. 0.0.0.0 to expose on the network). " +
+                    "Changing host or port stops the server.",
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        Spacer(Modifier.width(4.dp))
         OutlinedTextField(
             value = portText,
             onValueChange = { raw ->
@@ -229,6 +249,7 @@ private fun PortRow(
                     onPortChange(parsed)
                 }
             },
+            label = { Text("Port") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier

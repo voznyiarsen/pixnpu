@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,7 +25,6 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
@@ -38,6 +36,7 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -69,15 +68,16 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pixnpu.ui.components.RuntimeStatusBar
-import com.pixnpu.ui.components.SettingsSheet
 import com.pixnpu.ui.screens.InferenceScreen
 import com.pixnpu.ui.screens.ModelSelectorScreen
+import com.pixnpu.ui.screens.SettingsScreen
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 enum class Screen(val label: String, val selectedIcon: ImageVector, val unselectedIcon: ImageVector) {
     CHAT("Chat", Icons.Filled.ChatBubble, Icons.Outlined.ChatBubbleOutline),
     MODELS("Models", Icons.Filled.Inventory2, Icons.Outlined.Inventory2),
+    SETTINGS("Settings", Icons.Filled.Settings, Icons.Outlined.Settings),
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -100,11 +100,11 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val pendingTextFile by vm.pendingTextFile.collectAsStateWithLifecycle()
     val selectedModality by vm.selectedModality.collectAsStateWithLifecycle()
     val apiServerEnabled by vm.apiServerEnabled.collectAsStateWithLifecycle()
+    val apiHost by vm.apiHost.collectAsStateWithLifecycle()
     val apiPort by vm.apiPort.collectAsStateWithLifecycle()
     val apiServerUrl by vm.apiServerUrl.collectAsStateWithLifecycle()
     val keepScreenOn by vm.keepScreenOn.collectAsStateWithLifecycle()
 
-    var showSettings by remember { mutableStateOf(false) }
     var tabRowHeight by remember { mutableStateOf(56.dp) }
     val density = LocalDensity.current
     val imeVisible = WindowInsets.isImeVisible
@@ -140,15 +140,6 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                     }
                 },
                 actions = {
-                    TextButton(onClick = { showSettings = true }) {
-                        Icon(
-                            imageVector = Icons.Filled.Settings,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("Settings", color = MaterialTheme.colorScheme.primary)
-                    }
                     TextButton(
                         onClick = { vm.clearChat() },
                         enabled = messages.isNotEmpty(),
@@ -255,7 +246,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  downloadState = downloadState,
                                  selectedPath = selectedModel?.absolutePath,
                                  modelLoadStatus = modelLoadStatus,
-                                 onLoad = { model, mod -> vm.loadModel(model, mod) },
+                                 onLoad = { model -> vm.loadModel(model) },
                                  onUnload = vm::unloadModel,
                                  onVerify = vm::verifyModel,
                                  onDelete = vm::deleteModel,
@@ -263,35 +254,31 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  onImport = vm::importModel,
                                  onPause = vm::pauseDownload,
                                  onCancelDownload = vm::cancelDownload,
-                                 selectedModality = selectedModality,
+                             )
+                             Screen.SETTINGS -> SettingsScreen(
+                                 params = params,
+                                 systemPrompt = systemPrompt,
+                                 template = template,
+                                 modality = selectedModality,
+                                 isGenerating = isGenerating,
+                                 apiServerEnabled = apiServerEnabled,
+                                 apiHost = apiHost,
+                                 apiPort = apiPort,
+                                 apiServerUrl = apiServerUrl,
+                                 keepScreenOn = keepScreenOn,
+                                 onChangeParams = vm::updateParams,
+                                 onChangeSystemPrompt = vm::updateSystemPrompt,
+                                 onChangeTemplate = vm::setTemplate,
                                  onModalityChange = vm::setSelectedModality,
+                                 onToggleApiServer = vm::toggleApiServer,
+                                 onApiHostChange = vm::setApiHost,
+                                 onApiPortChange = vm::setApiPort,
+                                 onKeepScreenOnChange = vm::setKeepScreenOn,
                              )
                     }
                 }
             }
         }
-    }
-
-    if (showSettings) {
-        SettingsSheet(
-            params = params,
-            systemPrompt = systemPrompt,
-            template = template,
-            modality = selectedModality,
-            isGenerating = isGenerating,
-            apiServerEnabled = apiServerEnabled,
-            apiPort = apiPort,
-            apiServerUrl = apiServerUrl,
-            keepScreenOn = keepScreenOn,
-            onChangeParams = vm::updateParams,
-            onChangeSystemPrompt = vm::updateSystemPrompt,
-            onChangeTemplate = vm::setTemplate,
-            onModalityChange = vm::setSelectedModality,
-            onToggleApiServer = vm::toggleApiServer,
-            onApiPortChange = vm::setApiPort,
-            onKeepScreenOnChange = vm::setKeepScreenOn,
-            onDismiss = { showSettings = false },
-        )
     }
 }
 

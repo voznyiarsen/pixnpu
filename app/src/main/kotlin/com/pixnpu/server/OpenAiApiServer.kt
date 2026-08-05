@@ -34,12 +34,16 @@ import kotlinx.serialization.json.Json
 private const val TAG = "OpenAiApiServer"
 
 /**
- * Minimal OpenAI-compatible HTTP API (Ktor/CIO) bound to loopback only.
+ * Minimal OpenAI-compatible HTTP API (Ktor/CIO).
  *
  * Endpoints:
  *  - GET  /health, /          basic service info
  *  - GET  /v1/models          currently loaded model
  *  - POST /v1/chat/completions chat completions, JSON or SSE streaming
+ *
+ * Binds to loopback (127.0.0.1) by default. The bind address is configurable
+ * from Settings (e.g. 0.0.0.0 to expose it on the LAN — there is no auth, so
+ * only do that on trusted networks).
  *
  * Stateless: each request maps the full messages array onto the engine with
  * trackHistory=false, so API calls never read from or write to the app chat.
@@ -51,11 +55,15 @@ class OpenAiApiServer(
     private val engine: LiteRTLMEngineInterface,
 ) {
     companion object {
-        /** Loopback only — never reachable from the network. */
+        /** Loopback only — the safe default. */
         const val HOST = "127.0.0.1"
         const val PORT = 8080
         const val MIN_PORT = 1024
         const val MAX_PORT = 65535
+
+        /** True for loopback-style bind addresses where no extra warning is needed. */
+        fun isLoopback(host: String): Boolean =
+            host == "127.0.0.1" || host == "localhost" || host == "::1" || host.startsWith("127.")
     }
 
     /**
@@ -70,20 +78,20 @@ class OpenAiApiServer(
     val isRunning: Boolean get() = server != null
 
     /**
-     * Starts the server on the given port. Blocks until startup completes;
-     * call from Dispatchers.IO.
+     * Starts the server bound to the given host/port. Blocks until startup
+     * completes; call from Dispatchers.IO.
      */
-    fun start(port: Int = PORT) {
+    fun start(host: String = HOST, port: Int = PORT) {
         if (server != null) {
             Log.w(TAG, "start() called while already running")
             return
         }
-        val instance = embeddedServer(CIO, host = HOST, port = port) {
+        val instance = embeddedServer(CIO, host = host, port = port) {
             openAiApiModule(engine, context, modelIdProvider = { currentModelId.get() })
         }
         server = instance
         instance.start(wait = false)
-        Log.i(TAG, "API server listening on http://$HOST:$port")
+        Log.i(TAG, "API server listening on http://$host:$port")
     }
 
     /**

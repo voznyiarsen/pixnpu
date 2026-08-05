@@ -5,7 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,11 +23,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -37,8 +30,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.pixnpu.engine.Modality
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelLoadStatus
@@ -61,7 +51,7 @@ fun ModelSelectorScreen(
     downloadState: DownloadState,
     selectedPath: String?,
     modelLoadStatus: Map<String, ModelLoadStatus>,
-    onLoad: (LocalModel, Modality) -> Unit,
+    onLoad: (LocalModel) -> Unit,
     onUnload: (LocalModel) -> Unit,
     onVerify: (LocalModel) -> Unit,
     onDelete: (LocalModel) -> Unit,
@@ -69,8 +59,6 @@ fun ModelSelectorScreen(
      onImport: (Uri) -> Unit,
      onPause: () -> Unit,
      onCancelDownload: () -> Unit,
-     selectedModality: Modality,
-     onModalityChange: (Modality) -> Unit,
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<LocalModel?>(null) }
@@ -138,9 +126,7 @@ fun ModelSelectorScreen(
                          model = model,
                          selected = model.absolutePath == selectedPath,
                          loadStatus = modelLoadStatus[model.name] ?: ModelLoadStatus.Idle,
-                         selectedModality = selectedModality,
-                         onModalityChange = onModalityChange,
-                         onLoad = { onLoad(model, selectedModality) },
+                         onLoad = { onLoad(model) },
                          onUnload = { onUnload(model) },
                          onVerify = { onVerify(model) },
                          onDelete = { pendingDelete = model },
@@ -195,9 +181,7 @@ private fun ModelCard(
     model: LocalModel,
     selected: Boolean,
     loadStatus: ModelLoadStatus,
-    selectedModality: Modality,
-    onModalityChange: (Modality) -> Unit,
-    onLoad: (Modality) -> Unit,
+    onLoad: () -> Unit,
     onUnload: () -> Unit,
     onVerify: () -> Unit,
     onDelete: () -> Unit,
@@ -252,17 +236,10 @@ private fun ModelCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                ModalityMenu(
-                    selectedModality = selectedModality,
-                    onModalityChange = onModalityChange,
-                    modifier = Modifier
-                        .widthIn(min = 96.dp)
-                        .height(40.dp),
-                )
                 val isStopping =
                     selected || loadStatus == ModelLoadStatus.Loading || loadStatus == ModelLoadStatus.Unloading
                 OutlinedButton(
-                    onClick = { if (isStopping) onUnload() else onLoad(selectedModality) },
+                    onClick = { if (isStopping) onUnload() else onLoad() },
                     shape = RoundedCornerShape(20.dp),
                     colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -288,58 +265,6 @@ private fun ModelCard(
                 ) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ModalityMenu(
-    selectedModality: Modality,
-    onModalityChange: (Modality) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
-        modifier = modifier,
-    ) {
-        OutlinedButton(
-            onClick = { expanded = true },
-            shape = RoundedCornerShape(20.dp),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            ),
-            modifier = Modifier.height(40.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-        ) {
-            Text(
-                text = selectedModality.label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-            Icon(
-                imageVector = Icons.Default.ArrowDropDown,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            Modality.entries.forEach { modality ->
-                DropdownMenuItem(
-                    onClick = {
-                        onModalityChange(modality)
-                        expanded = false
-                    },
-                    text = { Text(modality.label) },
-                )
             }
         }
     }

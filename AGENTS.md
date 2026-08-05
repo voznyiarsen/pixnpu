@@ -103,7 +103,11 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 ```
 
 ### OpenAI-compatible API
-- Ktor/CIO server in `server/`, bound to **127.0.0.1:8080 only** (never on the network).
+- Ktor/CIO server in `server/`, bound to **loopback (`127.0.0.1`) by default**. The bind
+  host + port are configurable in the **Settings tab** (persisted in SharedPreferences);
+  binding to `0.0.0.0` exposes the server on the network — the UI shows a warning
+  (no auth yet). `OpenAiApiServer.start(host, port)`, port clamped 1024..65535;
+  changing host/port while running stops the server.
 - Endpoints: `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (JSON or SSE
   `text/event-stream` with `data: [DONE]` terminator). Everything else → OpenAI-style 404.
 - **Stateless per request**: the full `messages` array is flattened into one role-prefixed
@@ -113,8 +117,8 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 - Content parts: `text`, `image_url` (data: URI or file:// only), `input_audio` (base64,
   must be WAV — miniaudio constraint, same as the app UI).
 - One generation at a time (shared engine with the UI): busy → HTTP 429 `code:"busy"`.
-- Toggle: "API" button in the top bar (needs a loaded model). Server dies with the process —
-  no foreground service. Follow-ups: Bearer auth, configurable port, https image URLs.
+- Toggle: **API Server switch in the Settings tab** (needs a loaded model). Server dies
+  with the process — no foreground service. Follow-ups: Bearer auth, https image URLs.
 - Tests: `ChatCompletionsProcessorTest` (mapping/validation) + `OpenAiApiServerTest`
   (route tests via ktor `testApplication`). **Test JVM must be Java 21+**: LiteRT-LM 0.15.0
   ships Java 21 bytecode (class file 65) — `tasks.withType<Test> { javaLauncher }` in
