@@ -259,14 +259,16 @@ private fun ModelCard(
                         .widthIn(min = 96.dp)
                         .height(40.dp),
                 )
+                val isStopping =
+                    selected || loadStatus == ModelLoadStatus.Loading || loadStatus == ModelLoadStatus.Unloading
                 OutlinedButton(
-                    onClick = { onLoad(selectedModality) },
+                    onClick = { if (isStopping) onUnload() else onLoad(selectedModality) },
                     shape = RoundedCornerShape(20.dp),
                     colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     ),
                 ) {
-                    Text(if (selected || loadStatus == ModelLoadStatus.Loading) "Stop" else "Load")
+                    Text(if (isStopping) "Stop" else "Load")
                 }
                 OutlinedButton(
                     onClick = onVerify,

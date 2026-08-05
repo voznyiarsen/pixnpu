@@ -16,6 +16,17 @@ data class AudioClip(
     val durationMs: Long,
 )
 
+/**
+ * A text file read from storage and attached to a message as context.
+ * Its contents are wrapped in file markers so the model knows where the
+ * text came from.
+ */
+data class TextFileClip(
+    val name: String,
+    val content: String,
+    val truncated: Boolean = false,
+)
+
 data class ChatMessage(
     val id: Long,
     val role: ChatRole,
@@ -23,4 +34,5 @@ data class ChatMessage(
     val streaming: Boolean = false,
     val imageUri: Uri? = null,
     val audioBytes: ByteArray? = null,
+    val textFile: TextFileClip? = null,
 )

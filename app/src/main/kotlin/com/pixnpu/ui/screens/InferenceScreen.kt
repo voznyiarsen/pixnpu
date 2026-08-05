@@ -1,8 +1,11 @@
 package com.pixnpu.ui.screens
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
@@ -38,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.AudioFile
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.rounded.Add
@@ -85,6 +89,7 @@ import coil.request.ImageRequest
 import com.pixnpu.ui.AudioClip
 import com.pixnpu.ui.ChatMessage
 import com.pixnpu.ui.ChatRole
+import com.pixnpu.ui.TextFileClip
 import com.pixnpu.ui.components.AudioFileDecodeResult
 import com.pixnpu.ui.components.AudioRecorder
 import com.pixnpu.ui.components.AudioRecorderPanel
@@ -92,7 +97,9 @@ import com.pixnpu.ui.components.StreamingText
 import com.pixnpu.ui.components.decodeAudioFileToPcm
 import com.pixnpu.ui.components.pcmBytesToDurationMs
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -104,6 +111,7 @@ fun InferenceScreen(
     engineMessage: String?,
     pendingImageUri: Uri?,
     pendingAudio: AudioClip?,
+    pendingTextFile: TextFileClip?,
     supportsVision: Boolean = true,
     supportsAudio: Boolean = true,
     onSend: (String) -> Unit,
@@ -111,6 +119,7 @@ fun InferenceScreen(
     onPickImage: () -> Unit,
     onClearImage: () -> Unit,
     onSetAudio: (AudioClip?) -> Unit,
+    onSetTextFile: (TextFileClip?) -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -144,6 +153,22 @@ fun InferenceScreen(
         if (granted) {
             isRecording = true
             recorder.start()
+        }
+    }
+
+    val textFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                when (val result = readTextFileClip(context, uri)) {
+                    null -> attachError = "Failed to read file"
+                    else -> {
+                        attachError = null
+                        onSetTextFile(result)
+                    }
+                }
+            }
         }
     }
 
@@ -231,11 +256,12 @@ fun InferenceScreen(
             isRecording = isRecording,
             pendingImageUri = pendingImageUri,
             pendingAudio = pendingAudio,
+            pendingTextFile = pendingTextFile,
             supportsVision = supportsVision,
             supportsAudio = supportsAudio,
             onValueChange = { input = it },
             onSend = {
-                if (input.isNotBlank() || pendingImageUri != null || pendingAudio != null) {
+                if (input.isNotBlank() || pendingImageUri != null || pendingAudio != null || pendingTextFile != null) {
                     onSend(input)
                     input = ""
                 }
@@ -244,6 +270,7 @@ fun InferenceScreen(
             onAttachClick = { showAttachSheet = true },
             onClearImage = onClearImage,
             onClearAudio = { onSetAudio(null) },
+            onClearTextFile = { onSetTextFile(null) },
             focusRequester = focusRequester,
             modifier = Modifier
                 .fillMaxWidth()
@@ -271,6 +298,10 @@ fun InferenceScreen(
                         audioFileLauncher.launch(arrayOf("audio/*"))
                     })
                 }
+                add(AttachOptionSpec(Icons.Outlined.Description, "File") {
+                    showAttachSheet = false
+                    textFileLauncher.launch(arrayOf("text/*"))
+                })
             }
             if (options.isEmpty()) {
                 Text(
@@ -391,6 +422,14 @@ private fun MessageBubble(message: ChatMessage) {
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                             )
                         }
+                        message.textFile?.let { clip ->
+                            FileClipChip(
+                                name = clip.name,
+                                truncated = clip.truncated,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            )
+                        }
                         if (message.text.isNotBlank()) {
                             Text(
                                 text = message.text,
@@ -435,6 +474,7 @@ private fun InputBar(
     isRecording: Boolean,
     pendingImageUri: Uri?,
     pendingAudio: AudioClip?,
+    pendingTextFile: TextFileClip?,
     supportsVision: Boolean = true,
     supportsAudio: Boolean = true,
     onValueChange: (String) -> Unit,
@@ -443,6 +483,7 @@ private fun InputBar(
     onAttachClick: () -> Unit,
     onClearImage: () -> Unit,
     onClearAudio: () -> Unit,
+    onClearTextFile: () -> Unit,
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
@@ -494,6 +535,28 @@ private fun InputBar(
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = onClearImage) {
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+            pendingTextFile?.let { clip ->
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FileClipChip(
+                        name = clip.name,
+                        truncated = clip.truncated,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = "File Attached",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onClearTextFile) {
                         Text("Remove", color = MaterialTheme.colorScheme.error)
                     }
                 }
@@ -562,7 +625,7 @@ private fun InputBar(
                         )
                     }
                 } else {
-                    val canSend = value.isNotBlank() || pendingImageUri != null || pendingAudio != null
+                    val canSend = value.isNotBlank() || pendingImageUri != null || pendingAudio != null || pendingTextFile != null
                     FilledIconButton(
                         onClick = onSend,
                         enabled = canSend,
@@ -636,6 +699,39 @@ private fun AudioClipChip(
     }
 }
 
+@Composable
+private fun FileClipChip(
+    name: String,
+    truncated: Boolean,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                shape = RoundedCornerShape(10.dp),
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Description,
+            contentDescription = "Text file",
+            tint = tint,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = if (truncated) "$name · truncated" else name,
+            style = MaterialTheme.typography.labelMedium,
+            color = tint,
+            maxLines = 1,
+        )
+    }
+}
+
 private data class AttachOptionSpec(
     val icon: ImageVector,
     val label: String,
@@ -674,3 +770,37 @@ private fun AttachOption(
         )
     }
 }
+
+/** Maximum bytes of a text file to attach as context (≈4k tokens at 4 bytes/token). */
+private const val maxTextFileBytes = 16 * 1024
+
+/**
+ * Reads a picked text file (capped at [maxTextFileBytes]) as UTF-8 so it can be
+ * injected into the prompt as context. Returns null if the file cannot be read.
+ */
+private suspend fun readTextFileClip(context: Context, uri: Uri): TextFileClip? =
+    withContext(Dispatchers.IO) {
+        try {
+            val name = context.contentResolver.query(
+                uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            } ?: "file.txt"
+            val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                val buf = ByteArray(maxTextFileBytes + 1)
+                var total = 0
+                while (total < buf.size) {
+                    val read = input.read(buf, total, buf.size - total)
+                    if (read == -1) break
+                    total += read
+                }
+                buf.copyOf(total)
+            } ?: return@withContext null
+            val truncated = bytes.size > maxTextFileBytes
+            val limited = if (truncated) bytes.copyOfRange(0, maxTextFileBytes) else bytes
+            TextFileClip(name = name, content = String(limited, Charsets.UTF_8), truncated = truncated)
+        } catch (e: Exception) {
+            Log.e("InferenceScreen", "Failed to read text file: $uri", e)
+            null
+        }
+    }

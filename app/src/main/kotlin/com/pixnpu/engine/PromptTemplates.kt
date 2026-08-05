@@ -12,6 +12,20 @@ enum class PromptTemplate(val label: String) {
 
 object PromptTemplates {
 
+    /**
+     * Wraps a text file's contents in XML-like markers so the model can tell the
+     * context came from an attached file (and which one). Uses a single-line name
+     * attribute so the opening/closing tags stay unambiguous for the tokenizer.
+     */
+    fun wrapFileContext(name: String, content: String, truncated: Boolean = false): String = buildString {
+        append("<file name=\"")
+        append(name.replace('"', '\'').replace("\n", " "))
+        append("\">\n")
+        append(content)
+        if (truncated) append("\n[truncated — file larger than the attachment limit]")
+        append("\n</file>")
+    }
+
     fun wrap(raw: String, template: PromptTemplate, systemPrompt: String): String = when (template) {
         PromptTemplate.Auto -> raw
         PromptTemplate.ChatML -> buildString {

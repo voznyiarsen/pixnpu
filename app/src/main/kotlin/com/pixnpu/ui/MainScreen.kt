@@ -4,7 +4,6 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,9 +19,9 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Inventory2
@@ -41,6 +40,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +54,7 @@ import com.pixnpu.ui.components.ParameterSheet
 import com.pixnpu.ui.components.RuntimeStatusBar
 import com.pixnpu.ui.screens.InferenceScreen
 import com.pixnpu.ui.screens.ModelSelectorScreen
+import kotlinx.coroutines.launch
 
 enum class Screen(val label: String, val selectedIcon: ImageVector, val unselectedIcon: ImageVector) {
     CHAT("Chat", Icons.Filled.ChatBubble, Icons.Outlined.ChatBubbleOutline),
@@ -77,11 +78,14 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val metrics by vm.metrics.collectAsStateWithLifecycle()
     val pendingImageUri by vm.pendingImageUri.collectAsStateWithLifecycle()
     val pendingAudio by vm.pendingAudio.collectAsStateWithLifecycle()
+    val pendingTextFile by vm.pendingTextFile.collectAsStateWithLifecycle()
     val selectedModality by vm.selectedModality.collectAsStateWithLifecycle()
 
-    var tab by remember { mutableStateOf(Screen.CHAT) }
     var showParams by remember { mutableStateOf(false) }
     val imeVisible = WindowInsets.isImeVisible
+    val scope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(pageCount = { Screen.entries.size })
+    val currentTab = Screen.entries[pagerState.currentPage.coerceIn(0, Screen.entries.size - 1)]
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -138,7 +142,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             Screen.entries.forEach { screen ->
-                                val selected = tab == screen
+                                val selected = currentTab == screen
                                 Column(
                                     modifier = Modifier
                                         .width(110.dp)
@@ -146,7 +150,9 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                         .background(
                                             if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
                                         )
-                                        .clickable { tab = screen }
+                                        .clickable {
+                                            scope.launch { pagerState.animateScrollToPage(screen.ordinal) }
+                                        }
                                         .padding(vertical = 8.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Center,
@@ -180,8 +186,8 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
             )
             Box(Modifier.weight(1f)) {
-                Crossfade(targetState = tab, label = "tab-transition") { currentTab ->
-                    when (currentTab) {
+                HorizontalPager(state = pagerState) { page ->
+                    when (Screen.entries[page]) {
                         Screen.CHAT -> InferenceScreen(
                             messages = messages,
                             isGenerating = isGenerating,
@@ -190,6 +196,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                             engineMessage = engineMessage,
                             pendingImageUri = pendingImageUri,
                             pendingAudio = pendingAudio,
+                            pendingTextFile = pendingTextFile,
                             onSend = vm::send,
                             onStop = vm::stop,
                             onPickImage = {
@@ -199,6 +206,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                             },
                              onClearImage = { vm.setPendingImage(null) },
                             onSetAudio = { vm.setPendingAudio(it) },
+                            onSetTextFile = { vm.setPendingTextFile(it) },
                             supportsVision = metrics.supportsVision,
                             supportsAudio = metrics.supportsAudio,
                         )

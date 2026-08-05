@@ -81,6 +81,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingAudio = MutableStateFlow<AudioClip?>(null)
     val pendingAudio: StateFlow<AudioClip?> = _pendingAudio.asStateFlow()
 
+    private val _pendingTextFile = MutableStateFlow<TextFileClip?>(null)
+    val pendingTextFile: StateFlow<TextFileClip?> = _pendingTextFile.asStateFlow()
+
     private val _engineMessage = MutableStateFlow<String?>(null)
     val engineMessage: StateFlow<String?> = _engineMessage.asStateFlow()
 
@@ -174,6 +177,14 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
                 Log.w("MainViewModel", "Load ignored: another model is already loading")
                 return@launch
             }
+            // If a model is currently unloading, wait for it to finish before
+            // starting the new load, otherwise the in-flight unload can race the
+            // new load (unloading the freshly-loaded engine and leaving the UI
+            // reporting the wrong model).
+            while (_modelLoadStatus.value.any { it.value == ModelLoadStatus.Unloading }) {
+                Log.d("MainViewModel", "Waiting for model unload to finish before loading ${model.name}")
+                delay(50)
+            }
             _engineMessage.value = null
             _isLoadingModel.value = model.name
             _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
@@ -260,6 +271,10 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         _pendingAudio.value = clip
     }
 
+    fun setPendingTextFile(clip: TextFileClip?) {
+        _pendingTextFile.value = clip
+    }
+
     /**
      * Maximum prompt length in characters
      */
@@ -274,9 +289,10 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         val prompt = text.trim()
         val imageUri = _pendingImageUri.value
         val audio = _pendingAudio.value
+        val textFile = _pendingTextFile.value
         
         // Validate input
-        if (prompt.isEmpty() && imageUri == null && audio == null) return
+        if (prompt.isEmpty() && imageUri == null && audio == null && textFile == null) return
         if (prompt.isNotEmpty() && prompt.length > maxPromptLength) {
             _engineMessage.value = "Prompt exceeds maximum length of $maxPromptLength characters"
             return
@@ -291,13 +307,14 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
             return
         }
 
-        Log.d("MainViewModel", "Sending prompt (${prompt.length} chars, image=${imageUri != null}, audio=${audio != null})")
+        Log.d("MainViewModel", "Sending prompt (${prompt.length} chars, image=${imageUri != null}, audio=${audio != null}, file=${textFile != null})")
         val userMessage = ChatMessage(
             id = messageId.incrementAndGet(),
             role = ChatRole.USER,
             text = prompt,
             imageUri = imageUri,
             audioBytes = audio?.bytes,
+            textFile = textFile,
         )
         val assistantMessage =
             ChatMessage(messageId.incrementAndGet(), ChatRole.ASSISTANT, "", streaming = true)
@@ -312,6 +329,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         }
         _pendingImageUri.value = null
         _pendingAudio.value = null
+        _pendingTextFile.value = null
         _isGenerating.value = true
 
         generationJob = viewModelScope.launch {
@@ -329,6 +347,11 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
                         if (path != null) {
                             add(Content.ImageFile(path))
                         }
+                    }
+                    if (textFile != null) {
+                        // File contents are injected as text context, wrapped in
+                        // markers so the model can attribute the context to a file.
+                        add(Content.Text(PromptTemplates.wrapFileContext(textFile.name, textFile.content, textFile.truncated)))
                     }
                     // Text last so the final prompt token follows the media (gallery practice).
                     add(Content.Text(prompt))
