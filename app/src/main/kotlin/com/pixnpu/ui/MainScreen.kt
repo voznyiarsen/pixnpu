@@ -1,6 +1,7 @@
 package com.pixnpu.ui
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -49,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +64,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.keepScreenOn
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -104,6 +107,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val apiPort by vm.apiPort.collectAsStateWithLifecycle()
     val apiServerUrl by vm.apiServerUrl.collectAsStateWithLifecycle()
     val keepScreenOn by vm.keepScreenOn.collectAsStateWithLifecycle()
+    val samplingPresets by vm.samplingPresets.collectAsStateWithLifecycle()
 
     var tabRowHeight by remember { mutableStateOf(56.dp) }
     val density = LocalDensity.current
@@ -116,6 +120,17 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         uri?.let { vm.setPendingImage(uri) }
+    }
+
+    // Errors and status messages surface as toasts instead of inline text.
+    val context = LocalContext.current
+    var lastToastMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(engineMessage) {
+        val message = engineMessage
+        if (message != null && message != lastToastMessage) {
+            lastToastMessage = message
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
     }
 
     Scaffold(
@@ -221,13 +236,12 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
             Box(Modifier.weight(1f)) {
                 HorizontalPager(state = pagerState) { page ->
                     when (Screen.entries[page]) {
-                        Screen.CHAT -> InferenceScreen(
-                            messages = messages,
-                            isGenerating = isGenerating,
-                            isLoadingModel = isLoadingModel != null,
-                            selectedModel = selectedModel?.name,
-                            engineMessage = engineMessage,
-                            pendingImageUri = pendingImageUri,
+                             Screen.CHAT -> InferenceScreen(
+                                 messages = messages,
+                                 isGenerating = isGenerating,
+                                 isLoadingModel = isLoadingModel != null,
+                                 selectedModel = selectedModel?.name,
+                                 pendingImageUri = pendingImageUri,
                             pendingAudio = pendingAudio,
                             pendingTextFile = pendingTextFile,
                             onSend = vm::send,
@@ -268,6 +282,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  apiPort = apiPort,
                                  apiServerUrl = apiServerUrl,
                                  keepScreenOn = keepScreenOn,
+                                 presets = samplingPresets,
                                  onChangeParams = vm::updateParams,
                                  onChangeSystemPrompt = vm::updateSystemPrompt,
                                  onChangeTemplate = vm::setTemplate,
@@ -276,6 +291,10 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  onApiHostChange = vm::setApiHost,
                                  onApiPortChange = vm::setApiPort,
                                  onKeepScreenOnChange = vm::setKeepScreenOn,
+                                 onCreatePreset = { name -> vm.createSamplingPreset(name, params) },
+                                 onDeletePreset = vm::deleteSamplingPreset,
+                                 onApplyPreset = vm::applySamplingPreset,
+                                 onResetSettings = vm::resetSettings,
                              )
                     }
                 }

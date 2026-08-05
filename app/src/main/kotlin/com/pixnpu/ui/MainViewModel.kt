@@ -13,6 +13,7 @@ import com.pixnpu.engine.LiteRTLMEngine
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.PromptTemplate
 import com.pixnpu.engine.PromptTemplates
+import com.pixnpu.engine.SamplingPreset
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelLoadStatus
@@ -39,6 +40,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -63,6 +67,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _keepScreenOn = MutableStateFlow(prefs.getBoolean("keep_screen_on", false))
     val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
+
+    private val _samplingPresets = MutableStateFlow(loadSamplingPresets())
+    val samplingPresets: StateFlow<List<SamplingPreset>> = _samplingPresets.asStateFlow()
     
     // Keep references to concrete implementations for cases where interface isn't sufficient
     private val rawManager: ModelManager = container.rawModelManager
@@ -247,6 +254,78 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setKeepScreenOn(enabled: Boolean) {
         _keepScreenOn.value = enabled
         prefs.edit().putBoolean("keep_screen_on", enabled).apply()
+    }
+
+    /** Max length of a custom preset name. */
+    private val maxPresetNameLength = 40
+
+    fun createSamplingPreset(name: String, params: GenerationParams) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty() || trimmed.length > maxPresetNameLength) {
+            _engineMessage.value = "Preset name must be 1-$maxPresetNameLength characters"
+            return
+        }
+        val updated = _samplingPresets.value
+            .filterNot { it.name == trimmed } +
+            SamplingPreset(trimmed, params.temperature, params.topK, params.topP)
+        _samplingPresets.value = updated
+        saveSamplingPresets(updated)
+        _engineMessage.value = "Preset \"$trimmed\" saved"
+    }
+
+    fun deleteSamplingPreset(name: String) {
+        val updated = _samplingPresets.value.filterNot { it.name == name }
+        _samplingPresets.value = updated
+        saveSamplingPresets(updated)
+        _engineMessage.value = "Preset \"$name\" deleted"
+    }
+
+    fun applySamplingPreset(name: String) {
+        val preset = _samplingPresets.value.find { it.name == name } ?: return
+        updateParams(
+            _params.value.copy(
+                temperature = preset.temperature,
+                topK = preset.topK,
+                topP = preset.topP,
+            ),
+        )
+        _engineMessage.value = "Preset \"$name\" applied"
+    }
+
+    private fun saveSamplingPresets(presets: List<SamplingPreset>) {
+        prefs.edit()
+            .putString("sampling_presets", Json.encodeToString(presets))
+            .apply()
+    }
+
+    private fun loadSamplingPresets(): List<SamplingPreset> = runCatching {
+        Json.decodeFromString<List<SamplingPreset>>(
+            prefs.getString("sampling_presets", "[]") ?: "[]",
+        )
+    }.getOrDefault(emptyList())
+
+    /**
+     * Restores every persisted setting (host, port, modality, params, prompt,
+     * template, toggles, presets) to its default value.
+     */
+    fun resetSettings() {
+        if (_apiServerEnabled.value) {
+            apiServerJob?.cancel()
+            apiServerJob = viewModelScope.launch {
+                withContext(Dispatchers.IO) { container.openAiApiServer.stop() }
+                _apiServerEnabled.value = false
+            }
+        }
+        _apiPort.value = OpenAiApiServer.PORT
+        _apiHost.value = OpenAiApiServer.HOST
+        _selectedModality.value = Modality.TextOnly
+        _params.value = GenerationParams()
+        _systemPrompt.value = ""
+        _template.value = PromptTemplate.Auto
+        _keepScreenOn.value = false
+        _samplingPresets.value = emptyList()
+        prefs.edit().clear().apply()
+        _engineMessage.value = "Settings reset to defaults"
     }
 
     /**

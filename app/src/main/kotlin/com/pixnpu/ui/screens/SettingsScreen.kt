@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -32,6 +33,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,13 +46,14 @@ import com.pixnpu.BuildConfig
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.Modality
 import com.pixnpu.engine.PromptTemplate
+import com.pixnpu.engine.SamplingPreset
 import com.pixnpu.server.OpenAiApiServer
 import java.util.Locale
 
 /**
  * Settings screen (pager tab): API server bind host/port, multimodal input,
- * generation params and misc toggles. All values bind directly to
- * MainViewModel StateFlows.
+ * sampling presets, generation params and misc toggles. All values bind
+ * directly to MainViewModel StateFlows.
  */
 @Composable
 fun SettingsScreen(
@@ -64,6 +67,7 @@ fun SettingsScreen(
     apiPort: Int,
     apiServerUrl: String,
     keepScreenOn: Boolean,
+    presets: List<SamplingPreset>,
     onChangeParams: (GenerationParams) -> Unit,
     onChangeSystemPrompt: (String) -> Unit,
     onChangeTemplate: (PromptTemplate) -> Unit,
@@ -72,7 +76,20 @@ fun SettingsScreen(
     onApiHostChange: (String) -> Unit,
     onApiPortChange: (Int) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit,
+    onCreatePreset: (String) -> Unit,
+    onDeletePreset: (String) -> Unit,
+    onApplyPreset: (String) -> Unit,
+    onResetSettings: () -> Unit,
 ) {
+    var selectedPreset by remember { mutableStateOf<String?>(null) }
+    var presetName by remember { mutableStateOf("") }
+    var confirmReset by remember { mutableStateOf(false) }
+    LaunchedEffect(presets) {
+        if (selectedPreset != null && presets.none { it.name == selectedPreset }) {
+            selectedPreset = null
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -137,6 +154,101 @@ fun SettingsScreen(
                 )
             }
 
+            SectionHeader("Sampling Presets")
+            var presetMenuExpanded by remember { mutableStateOf(false) }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Preset", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        text = "Saved temperature / Top-K / Top-P combinations",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Box {
+                        TextButton(onClick = { presetMenuExpanded = true }) {
+                            Text(selectedPreset ?: "Select…")
+                        }
+                        DropdownMenu(
+                            expanded = presetMenuExpanded,
+                            onDismissRequest = { presetMenuExpanded = false },
+                        ) {
+                            presets.forEach { preset ->
+                                DropdownMenuItem(
+                                    text = { Text(preset.name) },
+                                    onClick = {
+                                        selectedPreset = preset.name
+                                        presetMenuExpanded = false
+                                        onApplyPreset(preset.name)
+                                    },
+                                )
+                            }
+                            if (presets.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("No presets yet") },
+                                    onClick = {},
+                                    enabled = false,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = presetName,
+                    onValueChange = { presetName = it },
+                    label = { Text("Preset Name") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = {
+                        if (presetName.isNotBlank()) {
+                            onCreatePreset(presetName)
+                            presetName = ""
+                        }
+                    },
+                ) {
+                    Text("Save", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (selectedPreset != null) {
+                        "Applying a preset updates Temperature, Top-K and Top-P"
+                    } else {
+                        "Select a preset to apply it, or save the current values"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(
+                    onClick = {
+                        selectedPreset?.let {
+                            onDeletePreset(it)
+                            selectedPreset = null
+                        }
+                    },
+                    enabled = selectedPreset != null,
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            }
+
             SectionHeader("Generation Params")
             GenerationParamsSection(
                 params = params,
@@ -169,8 +281,47 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Reset Settings", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        text = "Restores defaults and deletes all custom presets",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                TextButton(onClick = { confirmReset = true }) {
+                    Text("Reset", color = MaterialTheme.colorScheme.error)
+                }
+            }
             Spacer(Modifier.height(8.dp))
         }
+
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Reset Settings?") },
+            text = { Text("All settings and custom presets will be restored to defaults.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmReset = false
+                        onResetSettings()
+                    },
+                ) {
+                    Text("Reset", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReset = false }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -223,22 +374,13 @@ private fun BindAddressRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            OutlinedTextField(
-                value = host,
-                onValueChange = { onHostChange(it) },
-                label = { Text("Bind Host") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                text = "IP to listen on (e.g. 0.0.0.0 to expose on the network). " +
-                    "Changing host or port stops the server.",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.width(4.dp))
+        OutlinedTextField(
+            value = host,
+            onValueChange = { onHostChange(it) },
+            label = { Text("Bind Host") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+        )
         OutlinedTextField(
             value = portText,
             onValueChange = { raw ->

@@ -108,7 +108,6 @@ fun InferenceScreen(
     isGenerating: Boolean,
     isLoadingModel: Boolean,
     selectedModel: String?,
-    engineMessage: String?,
     pendingImageUri: Uri?,
     pendingAudio: AudioClip?,
     pendingTextFile: TextFileClip?,
@@ -213,15 +212,6 @@ fun InferenceScreen(
                     }
                 }
             }
-        }
-
-        engineMessage?.let { message ->
-            Text(
-                text = message,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-            )
         }
 
         if (isRecording) {
