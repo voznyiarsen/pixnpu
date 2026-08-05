@@ -15,8 +15,17 @@ data class ChatCompletionRequest(
     val messages: List<ChatMessage> = emptyList(),
     val model: String? = null,
     val temperature: Double? = null,
+    @SerialName("top_p") val topP: Double? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
+    @SerialName("max_completion_tokens") val maxCompletionTokens: Int? = null,
+    val n: Int = 1,
     val stream: Boolean = false,
+    @SerialName("stream_options") val streamOptions: StreamOptions? = null,
+)
+
+@Serializable
+data class StreamOptions(
+    @SerialName("include_usage") val includeUsage: Boolean? = null,
 )
 
 @Serializable
@@ -27,6 +36,7 @@ data class ChatCompletionResponse(
     val model: String,
     val choices: List<Choice>,
     val usage: Usage,
+    @SerialName("system_fingerprint") val systemFingerprint: String? = null,
 )
 
 @Serializable
@@ -56,6 +66,7 @@ data class ChatCompletionChunk(
     val created: Long,
     val model: String,
     val choices: List<ChunkChoice>,
+    val usage: Usage? = null,
 )
 
 @Serializable
@@ -75,6 +86,7 @@ data class ChunkDelta(
 data class ErrorBody(
     val message: String,
     val type: String = "invalid_request_error",
+    val param: String? = null,
     val code: String? = null,
 )
 

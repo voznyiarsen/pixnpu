@@ -181,9 +181,10 @@ class ChatCompletionsProcessorTest {
     @Test
     fun `request params override defaults`() {
         val params = processor.effectiveParams(
-            ChatCompletionRequest(temperature = 1.2, maxTokens = 512),
+            ChatCompletionRequest(temperature = 1.2, topP = 0.5, maxTokens = 512),
         )
         assertEquals(1.2f, params.temperature)
+        assertEquals(0.5f, params.topP)
         assertEquals(512, params.maxTokens)
     }
 
@@ -191,21 +192,54 @@ class ChatCompletionsProcessorTest {
     fun `missing params fall back to defaults`() {
         val params = processor.effectiveParams(ChatCompletionRequest())
         assertEquals(GenerationParams().temperature, params.temperature)
+        assertEquals(GenerationParams().topP, params.topP)
         assertEquals(GenerationParams().maxTokens, params.maxTokens)
     }
 
     @Test
+    fun `max_completion_tokens is accepted as alias`() {
+        val params = processor.effectiveParams(ChatCompletionRequest(maxCompletionTokens = 256))
+        assertEquals(256, params.maxTokens)
+    }
+
+    @Test
+    fun `both max_tokens and max_completion_tokens throws BadRequest`() {
+        val e = assertThrows(ChatCompletionError.BadRequest::class.java) {
+            processor.effectiveParams(ChatCompletionRequest(maxTokens = 10, maxCompletionTokens = 10))
+        }
+        assertEquals("max_tokens", e.param)
+    }
+
+    @Test
+    fun `n greater than one throws BadRequest`() {
+        val e = assertThrows(ChatCompletionError.BadRequest::class.java) {
+            processor.effectiveParams(ChatCompletionRequest(n = 2))
+        }
+        assertEquals("n", e.param)
+    }
+
+    @Test
     fun `invalid max_tokens throws BadRequest`() {
-        assertThrows(ChatCompletionError.BadRequest::class.java) {
+        val e = assertThrows(ChatCompletionError.BadRequest::class.java) {
             processor.effectiveParams(ChatCompletionRequest(maxTokens = 0))
         }
+        assertEquals("max_tokens", e.param)
     }
 
     @Test
     fun `invalid temperature throws BadRequest`() {
-        assertThrows(ChatCompletionError.BadRequest::class.java) {
+        val e = assertThrows(ChatCompletionError.BadRequest::class.java) {
             processor.effectiveParams(ChatCompletionRequest(temperature = 3.0))
         }
+        assertEquals("temperature", e.param)
+    }
+
+    @Test
+    fun `invalid top_p throws BadRequest`() {
+        val e = assertThrows(ChatCompletionError.BadRequest::class.java) {
+            processor.effectiveParams(ChatCompletionRequest(topP = 1.5))
+        }
+        assertEquals("top_p", e.param)
     }
 
     // --- estimateUsage ---

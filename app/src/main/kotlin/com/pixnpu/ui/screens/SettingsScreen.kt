@@ -66,6 +66,7 @@ fun SettingsScreen(
     apiHost: String,
     apiPort: Int,
     apiServerUrl: String,
+    apiToken: String,
     keepScreenOn: Boolean,
     presets: List<SamplingPreset>,
     onChangeParams: (GenerationParams) -> Unit,
@@ -75,6 +76,7 @@ fun SettingsScreen(
     onToggleApiServer: () -> Unit,
     onApiHostChange: (String) -> Unit,
     onApiPortChange: (Int) -> Unit,
+    onApiTokenChange: (String) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit,
     onCreatePreset: (String) -> Unit,
     onDeletePreset: (String) -> Unit,
@@ -119,6 +121,23 @@ fun SettingsScreen(
             port = apiPort,
             onHostChange = onApiHostChange,
             onPortChange = onApiPortChange,
+        )
+        OutlinedTextField(
+            value = apiToken,
+            onValueChange = { onApiTokenChange(it) },
+            label = { Text("API Token (optional)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = if (apiToken.isBlank()) {
+                "No auth — clients can call without a key. Set a token to require " +
+                    "Authorization: Bearer <token>."
+            } else {
+                "Requests must send Authorization: Bearer <token>. Changing it stops the server."
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (!OpenAiApiServer.isLoopback(apiHost)) {
             Text(

@@ -10,6 +10,7 @@ import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.Modality
 import com.pixnpu.engine.PromptTemplate
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -73,7 +74,11 @@ class OpenAiApiServerTest {
         override suspend fun clearHistory() = Unit
     }
 
-    private fun testServer(engine: FakeEngine, block: suspend io.ktor.client.HttpClient.() -> Unit) {
+    private fun testServer(
+        engine: FakeEngine,
+        token: String? = null,
+        block: suspend io.ktor.client.HttpClient.() -> Unit,
+    ) {
         val context = mockk<Context>(relaxed = true)
         testApplication {
             application {
@@ -81,6 +86,7 @@ class OpenAiApiServerTest {
                     engine = engine,
                     context = context,
                     modelIdProvider = { engine.modelId },
+                    tokenProvider = { token },
                 )
             }
             val client = createClient { }
@@ -147,6 +153,50 @@ class OpenAiApiServerTest {
         assertEquals(42, engine.lastParamsOverride?.maxTokens)
     }
 
+    @Test
+    fun `top_p maps to engine params`() {
+        val engine = FakeEngine().apply { modelId = "m" }
+        testServer(engine) {
+            post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"m","top_p":0.3,"messages":[{"role":"user","content":"Hi"}]}""")
+            }
+        }
+        assertEquals(0.3f, engine.lastParamsOverride?.topP)
+    }
+
+    @Test
+    fun `max_completion_tokens maps to max tokens`() {
+        val engine = FakeEngine().apply { modelId = "m" }
+        testServer(engine) {
+            post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"m","max_completion_tokens":77,"messages":[{"role":"user","content":"Hi"}]}""")
+            }
+        }
+        assertEquals(77, engine.lastParamsOverride?.maxTokens)
+    }
+
+    @Test
+    fun `both max_tokens and max_completion_tokens return 400`() = testServer(FakeEngine().apply { modelId = "m" }) {
+        val response = post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"model":"m","max_tokens":10,"max_completion_tokens":10,"messages":[{"role":"user","content":"Hi"}]}""")
+        }
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+    }
+
+    @Test
+    fun `n greater than 1 returns 400`() = testServer(FakeEngine().apply { modelId = "m" }) {
+        val response = post("/v1/chat/completions") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"model":"m","n":2,"messages":[{"role":"user","content":"Hi"}]}""")
+        }
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+        val body = json.decodeFromString<ApiError>(response.bodyAsText())
+        assertEquals("n", body.error.param)
+    }
+
     // --- streaming ---
 
     @Test
@@ -157,6 +207,7 @@ class OpenAiApiServerTest {
         }
         assertEquals(HttpStatusCode.OK, response.status)
         assertEquals("text/event-stream", response.contentType()?.withoutParameters()?.toString())
+        assertEquals("no-cache", response.headers["Cache-Control"])
         val body = response.bodyAsText()
         assertTrue(body.contains("\"object\":\"chat.completion.chunk\""))
         assertTrue(body.contains("\"delta\":{\"role\":\"assistant\""))
@@ -166,15 +217,79 @@ class OpenAiApiServerTest {
         assertTrue(body.trimEnd().endsWith("data: [DONE]"))
     }
 
+    @Test
+    fun `stream with include_usage emits usage chunk before DONE`() =
+        testServer(FakeEngine().apply { modelId = "m" }) {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"model":"m","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"Hi"}]}""",
+                )
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = response.bodyAsText()
+            assertTrue(body.contains("\"choices\":[],\"usage\":{\"prompt_tokens\""))
+            val usageIndex = body.indexOf("\"usage\"")
+            val doneIndex = body.indexOf("data: [DONE]")
+            assertTrue(usageIndex != -1 && doneIndex > usageIndex)
+        }
+
+    // --- auth ---
+
+    @Test
+    fun `requests without token are rejected with 401 when token configured`() =
+        testServer(FakeEngine().apply { modelId = "m" }, token = "secret") {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"m","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.Unauthorized, response.status)
+            val body = json.decodeFromString<ApiError>(response.bodyAsText())
+            assertEquals("invalid_api_key", body.error.code)
+        }
+
+    @Test
+    fun `requests with wrong token are rejected with 401`() =
+        testServer(FakeEngine().apply { modelId = "m" }, token = "secret") {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                header("Authorization", "Bearer wrong")
+                setBody("""{"model":"m","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.Unauthorized, response.status)
+        }
+
+    @Test
+    fun `requests with correct bearer token succeed`() =
+        testServer(FakeEngine().apply { modelId = "m" }, token = "secret") {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                header("Authorization", "Bearer secret")
+                setBody("""{"model":"m","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+        }
+
+    @Test
+    fun `models list requires token when configured`() =
+        testServer(FakeEngine().apply { modelId = "m" }, token = "secret") {
+            val response = get("/v1/models")
+            assertEquals(HttpStatusCode.Unauthorized, response.status)
+            val authed = get("/v1/models") {
+                header("Authorization", "Bearer secret")
+            }
+            assertEquals(HttpStatusCode.OK, authed.status)
+        }
+
     // --- errors ---
 
     @Test
-    fun `unknown model id returns 400 model_not_found`() = testServer(FakeEngine().apply { modelId = "m" }) {
+    fun `unknown model id returns 404 model_not_found`() = testServer(FakeEngine().apply { modelId = "m" }) {
         val response = post("/v1/chat/completions") {
             contentType(ContentType.Application.Json)
             setBody("""{"model":"other","messages":[{"role":"user","content":"Hi"}]}""")
         }
-        assertEquals(HttpStatusCode.BadRequest, response.status)
+        assertEquals(HttpStatusCode.NotFound, response.status)
         val body = json.decodeFromString<ApiError>(response.bodyAsText())
         assertEquals("model_not_found", body.error.code)
     }

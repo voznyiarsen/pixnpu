@@ -65,6 +65,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     val apiHost: StateFlow<String> = _apiHost.asStateFlow()
 
+    private val _apiToken = MutableStateFlow(prefs.getString("api_token", "") ?: "")
+    val apiToken: StateFlow<String> = _apiToken.asStateFlow()
+
     private val _keepScreenOn = MutableStateFlow(prefs.getBoolean("keep_screen_on", false))
     val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
 
@@ -251,6 +254,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setApiToken(token: String) {
+        val trimmed = token.trim()
+        if (trimmed == _apiToken.value) return
+        _apiToken.value = trimmed
+        prefs.edit().putString("api_token", trimmed).apply()
+        if (_apiServerEnabled.value) {
+            // A running server keeps its original token; stop it so the change applies.
+            apiServerJob?.cancel()
+            apiServerJob = viewModelScope.launch {
+                withContext(Dispatchers.IO) { container.openAiApiServer.stop() }
+                _apiServerEnabled.value = false
+                _engineMessage.value = "API server stopped — token changed"
+            }
+        }
+    }
+
     fun setKeepScreenOn(enabled: Boolean) {
         _keepScreenOn.value = enabled
         prefs.edit().putBoolean("keep_screen_on", enabled).apply()
@@ -318,6 +337,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _apiPort.value = OpenAiApiServer.PORT
         _apiHost.value = OpenAiApiServer.HOST
+        _apiToken.value = ""
         _selectedModality.value = Modality.TextOnly
         _params.value = GenerationParams()
         _systemPrompt.value = ""
@@ -351,7 +371,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             apiServerJob?.cancel()
             apiServerJob = viewModelScope.launch {
-                withContext(Dispatchers.IO) { container.openAiApiServer.start(_apiHost.value, _apiPort.value) }
+                withContext(Dispatchers.IO) {
+                    container.openAiApiServer.start(
+                        _apiHost.value,
+                        _apiPort.value,
+                        tokenProvider = { _apiToken.value },
+                    )
+                }
                 _apiServerEnabled.value = true
             }
         }

@@ -21,19 +21,21 @@ import kotlinx.serialization.json.jsonPrimitive
 sealed class ChatCompletionError(
     message: String,
     val errorType: String,
+    val param: String?,
     val code: String?,
     val status: Int,
 ) : Exception(message) {
-    class BadRequest(message: String, code: String? = null) :
-        ChatCompletionError(message, "invalid_request_error", code, 400)
+    class BadRequest(message: String, param: String? = null, code: String? = null) :
+        ChatCompletionError(message, "invalid_request_error", param, code, 400)
 
     class ModelNotFound(model: String) :
-        ChatCompletionError("The model '$model' does not exist", "invalid_request_error", "model_not_found", 400)
+        ChatCompletionError("The model '$model' does not exist", "invalid_request_error", null, "model_not_found", 404)
 
     class NoModelLoaded :
         ChatCompletionError(
             "No model is loaded. Load a model in the app before using the API",
             "server_error",
+            null,
             "no_model_loaded",
             400,
         )
@@ -42,6 +44,7 @@ sealed class ChatCompletionError(
         ChatCompletionError(
             "Another generation is already in progress",
             "server_error",
+            null,
             "busy",
             429,
         )
@@ -202,21 +205,52 @@ class ChatCompletionsProcessor(private val context: Context) {
     }
 
     /**
-     * Per-call generation parameters derived from the request; unspecified values
-     * fall back to the engine defaults.
+     * Per-call generation parameters derived from the request; unspecified
+     * values fall back to the engine defaults. `max_completion_tokens` is the
+     * modern alias for `max_tokens` (OpenAI accepts both, but not both at once).
      */
     fun effectiveParams(request: ChatCompletionRequest): GenerationParams {
         val maxTokens = request.maxTokens
+        val maxCompletionTokens = request.maxCompletionTokens
         if (maxTokens != null && maxTokens < 1) {
-            throw ChatCompletionError.BadRequest("'max_tokens' must be a positive integer")
+            throw ChatCompletionError.BadRequest("'max_tokens' must be a positive integer", "max_tokens")
+        }
+        if (maxCompletionTokens != null && maxCompletionTokens < 1) {
+            throw ChatCompletionError.BadRequest(
+                "'max_completion_tokens' must be a positive integer",
+                "max_completion_tokens",
+            )
+        }
+        if (maxTokens != null && maxCompletionTokens != null) {
+            throw ChatCompletionError.BadRequest(
+                "Only one of 'max_tokens' and 'max_completion_tokens' may be set",
+                "max_tokens",
+            )
         }
         val temperature = request.temperature
         if (temperature != null && (temperature < 0.0 || temperature > 2.0)) {
-            throw ChatCompletionError.BadRequest("'temperature' must be between 0 and 2")
+            throw ChatCompletionError.BadRequest("'temperature' must be between 0 and 2", "temperature")
+        }
+        val topP = request.topP
+        if (topP != null && (topP < 0.0 || topP > 1.0)) {
+            throw ChatCompletionError.BadRequest("'top_p' must be between 0 and 1", "top_p")
+        }
+        val n = request.n
+        if (n < 1) {
+            throw ChatCompletionError.BadRequest("'n' must be at least 1", "n")
+        }
+        if (n > 1) {
+            // The engine generates a single response per call; reject the rest
+            // explicitly instead of silently returning one choice.
+            throw ChatCompletionError.BadRequest(
+                "This server supports n=1 only, got n=$n",
+                "n",
+            )
         }
         return GenerationParams(
             temperature = temperature?.toFloat() ?: GenerationParams().temperature,
-            maxTokens = maxTokens ?: GenerationParams().maxTokens,
+            topP = topP?.toFloat() ?: GenerationParams().topP,
+            maxTokens = (maxTokens ?: maxCompletionTokens) ?: GenerationParams().maxTokens,
         )
     }
 

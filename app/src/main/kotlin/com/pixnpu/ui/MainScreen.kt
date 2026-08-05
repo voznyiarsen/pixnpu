@@ -106,6 +106,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val apiHost by vm.apiHost.collectAsStateWithLifecycle()
     val apiPort by vm.apiPort.collectAsStateWithLifecycle()
     val apiServerUrl by vm.apiServerUrl.collectAsStateWithLifecycle()
+    val apiToken by vm.apiToken.collectAsStateWithLifecycle()
     val keepScreenOn by vm.keepScreenOn.collectAsStateWithLifecycle()
     val samplingPresets by vm.samplingPresets.collectAsStateWithLifecycle()
 
@@ -281,6 +282,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  apiHost = apiHost,
                                  apiPort = apiPort,
                                  apiServerUrl = apiServerUrl,
+                                 apiToken = apiToken,
                                  keepScreenOn = keepScreenOn,
                                  presets = samplingPresets,
                                  onChangeParams = vm::updateParams,
@@ -290,6 +292,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  onToggleApiServer = vm::toggleApiServer,
                                  onApiHostChange = vm::setApiHost,
                                  onApiPortChange = vm::setApiPort,
+                                 onApiTokenChange = vm::setApiToken,
                                  onKeepScreenOnChange = vm::setKeepScreenOn,
                                  onCreatePreset = { name -> vm.createSamplingPreset(name, params) },
                                  onDeletePreset = vm::deleteSamplingPreset,

@@ -105,20 +105,32 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 ### OpenAI-compatible API
 - Ktor/CIO server in `server/`, bound to **loopback (`127.0.0.1`) by default**. The bind
   host + port are configurable in the **Settings tab** (persisted in SharedPreferences);
-  binding to `0.0.0.0` exposes the server on the network — the UI shows a warning
-  (no auth yet). `OpenAiApiServer.start(host, port)`, port clamped 1024..65535;
-  changing host/port while running stops the server.
+  binding to `0.0.0.0` exposes the server on the network — the UI shows a warning.
+  `OpenAiApiServer.start(host, port, tokenProvider)`, port clamped 1024..65535;
+  changing host/port/token while running stops the server.
+- **Bearer auth (optional)**: an **API Token** set in Settings requires
+  `Authorization: Bearer <token>` on `/v1/*` (wrong/missing → 401
+  `{"error":{...,"code":"invalid_api_key"}}`); blank token = open server.
+  `/health` and `/` stay unauthenticated. `tokenProvider` is read per request,
+  so the token can change without restarting.
 - Endpoints: `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (JSON or SSE
-  `text/event-stream` with `data: [DONE]` terminator). Everything else → OpenAI-style 404.
+  `text/event-stream` with `data: [DONE]` terminator, `Cache-Control: no-cache`).
+  Everything else → OpenAI-style 404.
 - **Stateless per request**: the full `messages` array is flattened into one role-prefixed
   prompt (`System:`/`User:`/`Assistant:`) and generated with `trackHistory=false`, so API
-  calls never read from or write to the app chat. `temperature`/`max_tokens` map to
-  `paramsOverride` in `engine.generate(...)`.
+  calls never read from or write to the app chat. `temperature`, `top_p`,
+  `max_tokens`/`max_completion_tokens` map to `paramsOverride` in `engine.generate(...)`.
+  `n` is accepted only as 1 (else 400, `param:"n"`); unknown params are ignored
+  (vLLM/llama.cpp convention); `max_tokens` + `max_completion_tokens` together → 400.
+- Streaming honors `stream_options.include_usage`: a final usage chunk with empty
+  `choices` is emitted before `[DONE]`. Chunks are word-sized (engine limitation,
+  not real tokens — see Known limitations).
 - Content parts: `text`, `image_url` (data: URI or file:// only), `input_audio` (base64,
   must be WAV — miniaudio constraint, same as the app UI).
 - One generation at a time (shared engine with the UI): busy → HTTP 429 `code:"busy"`.
+  Unknown model id → **404** `code:"model_not_found"` (matches OpenAI, not 400).
 - Toggle: **API Server switch in the Settings tab** (needs a loaded model). Server dies
-  with the process — no foreground service. Follow-ups: Bearer auth, https image URLs.
+  with the process — no foreground service. Follow-ups: https image URLs.
 - Tests: `ChatCompletionsProcessorTest` (mapping/validation) + `OpenAiApiServerTest`
   (route tests via ktor `testApplication`). **Test JVM must be Java 21+**: LiteRT-LM 0.15.0
   ships Java 21 bytecode (class file 65) — `tasks.withType<Test> { javaLauncher }` in

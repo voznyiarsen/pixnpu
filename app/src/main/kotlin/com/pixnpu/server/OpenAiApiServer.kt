@@ -19,6 +19,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.request.receive
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.get
@@ -80,14 +81,27 @@ class OpenAiApiServer(
     /**
      * Starts the server bound to the given host/port. Blocks until startup
      * completes; call from Dispatchers.IO.
+     *
+     * @param tokenProvider Supplies the required API token (null/blank = no auth).
+     *        Invoked per request, so changing the token while running applies to
+     *        new requests.
      */
-    fun start(host: String = HOST, port: Int = PORT) {
+    fun start(
+        host: String = HOST,
+        port: Int = PORT,
+        tokenProvider: () -> String? = { null },
+    ) {
         if (server != null) {
             Log.w(TAG, "start() called while already running")
             return
         }
         val instance = embeddedServer(CIO, host = host, port = port) {
-            openAiApiModule(engine, context, modelIdProvider = { currentModelId.get() })
+            openAiApiModule(
+                engine,
+                context,
+                modelIdProvider = { currentModelId.get() },
+                tokenProvider = tokenProvider,
+            )
         }
         server = instance
         instance.start(wait = false)
@@ -112,6 +126,7 @@ fun Application.openAiApiModule(
     engine: LiteRTLMEngineInterface,
     context: Context,
     modelIdProvider: () -> String?,
+    tokenProvider: () -> String? = { null },
 ) {
     val json = Json {
         ignoreUnknownKeys = true
@@ -129,11 +144,26 @@ fun Application.openAiApiModule(
         allowHeader(HttpHeaders.ContentType)
     }
 
+    fun unauthorized(call: ApplicationCall): Boolean {
+        val expected = tokenProvider()
+        if (expected.isNullOrEmpty()) return false
+        val provided = call.request.headers[HttpHeaders.Authorization]
+            ?.substringAfter(" ")
+            ?.trim()
+        return provided != expected
+    }
+
     routing {
         get("/") { call.respond(ServiceInfo()) }
         get("/health") { call.respond(ServiceInfo()) }
 
         get("/v1/models") {
+            if (unauthorized(call)) {
+                return@get call.respond(
+                    HttpStatusCode.Unauthorized,
+                    ApiError(ErrorBody("Incorrect API key provided", code = "invalid_api_key")),
+                )
+            }
             val modelId = modelIdProvider()
             val data = modelId?.let {
                 listOf(ModelInfo(id = it, created = System.currentTimeMillis() / 1000))
@@ -142,6 +172,12 @@ fun Application.openAiApiModule(
         }
 
         post("/v1/chat/completions") {
+            if (unauthorized(call)) {
+                return@post call.respond(
+                    HttpStatusCode.Unauthorized,
+                    ApiError(ErrorBody("Incorrect API key provided", code = "invalid_api_key")),
+                )
+            }
             val request = try {
                 call.receive<ChatCompletionRequest>()
             } catch (e: Exception) {
@@ -156,13 +192,13 @@ fun Application.openAiApiModule(
             } catch (e: ChatCompletionError) {
                 call.respond(
                     HttpStatusCode.fromValue(e.status),
-                    ApiError(ErrorBody(e.message ?: "error", e.errorType, e.code)),
+                    ApiError(ErrorBody(e.message ?: "error", e.errorType, e.param, e.code)),
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Chat completion failed", e)
                 call.respond(
                     HttpStatusCode.InternalServerError,
-                    ApiError(ErrorBody("Internal server error", "server_error", "internal_error")),
+                    ApiError(ErrorBody("Internal server error", "server_error", null, "internal_error")),
                 )
             }
         }
@@ -202,7 +238,18 @@ private suspend fun handleChatCompletion(
             .joinToString(" ") { it.text }
 
         if (request.stream) {
-            streamCompletion(call, json, id, created, model, flow)
+            val includeUsage = request.streamOptions?.includeUsage == true
+            streamCompletion(
+                call,
+                json,
+                id,
+                created,
+                model,
+                promptText,
+                includeUsage,
+                processor,
+                flow,
+            )
         } else {
             val reply = buildString { flow.collect { append(it) } }
             call.respond(
@@ -226,24 +273,35 @@ private suspend fun streamCompletion(
     id: String,
     created: Long,
     model: String,
+    promptText: String,
+    includeUsage: Boolean,
+    processor: ChatCompletionsProcessor,
     flow: Flow<String>,
 ) {
-    val chunk = { delta: ChunkDelta, finish: String? ->
+    fun chunk(delta: ChunkDelta, finish: String?, usage: Usage? = null): String =
         json.encodeToString(ChatCompletionChunk.serializer(), ChatCompletionChunk(
             id = id,
             created = created,
             model = model,
-            choices = listOf(ChunkChoice(index = 0, delta = delta, finishReason = finish)),
+            choices = if (usage == null) {
+                listOf(ChunkChoice(index = 0, delta = delta, finishReason = finish))
+            } else {
+                // OpenAI sends the usage frame with an empty choices array.
+                emptyList()
+            },
+            usage = usage,
         ))
-    }
+    call.response.header(HttpHeaders.CacheControl, "no-cache")
     call.respondTextWriter(contentType = ContentType.Text.EventStream) {
-        // Role frame first (OpenAI SSE convention)
-        writeSse(chunk(ChunkDelta(role = "assistant"), null))
+        // Role frame first (OpenAI SSE convention: role + empty content).
+        writeSse(chunk(ChunkDelta(role = "assistant", content = ""), null))
         flush()
 
+        val reply = StringBuilder()
         try {
             flow.collect { token ->
                 if (token.isNotEmpty()) {
+                    reply.append(token)
                     writeSse(chunk(ChunkDelta(content = token), null))
                     flush()
                 }
@@ -255,6 +313,9 @@ private suspend fun streamCompletion(
             return@respondTextWriter
         }
         writeSse(chunk(ChunkDelta(), "stop"))
+        if (includeUsage) {
+            writeSse(chunk(ChunkDelta(), null, usage = processor.estimateUsage(promptText, reply.toString())))
+        }
         writeSse("[DONE]")
         flush()
     }
