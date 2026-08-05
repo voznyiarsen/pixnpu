@@ -169,10 +169,12 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                             contentAlignment = Alignment.CenterStart,
                         ) {
                             // Sliding pill: tracks the pager so it glides between
-                            // buttons on swipe and animates on tab clicks.
+                            // buttons on swipe and animates on tab clicks. Progress
+                            // spans 0..lastTab so the pill reaches every tab.
                             val stepPx = with(LocalDensity.current) { (TabWidth + TabSpacing).toPx() }
+                            val maxProgress = (Screen.entries.size - 1).toFloat()
                             val progress = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
-                                .coerceIn(0f, 1f)
+                                .coerceIn(0f, maxProgress)
                             Box(
                                 modifier = Modifier
                                     .offset { IntOffset((progress * stepPx).roundToInt(), 0) }
