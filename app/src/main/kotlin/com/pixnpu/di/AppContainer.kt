@@ -5,6 +5,7 @@ import com.pixnpu.engine.LiteRTLMEngine
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.model.ModelManager
 import com.pixnpu.model.ModelManagerInterface
+import com.pixnpu.server.OpenAiApiServer
 
 /**
  * Simple dependency injection container for the app.
@@ -38,6 +39,14 @@ class AppContainer(private val context: Context) {
      */
     val rawEngine: LiteRTLMEngine by lazy {
         LiteRTLMEngine(context.applicationContext)
+    }
+
+    /**
+     * Provides the OpenAI-compatible API server. Shares the same [engine] instance
+     * the UI uses, so API calls are gated against UI generation.
+     */
+    val openAiApiServer: OpenAiApiServer by lazy {
+        OpenAiApiServer(context.applicationContext, engine)
     }
 }
 

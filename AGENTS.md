@@ -17,6 +17,9 @@ ui/                     Compose UI (InferenceScreen, ModelSelectorScreen, MainSc
 engine/                 LiteRTLMEngine.kt  — native engine wrapper, NPU-first
 model/                  ModelManager.kt    — resumable segmented downloads + SAF import
                         DownloadState.kt   — state machine for download/import
+server/                 OpenAiApiServer.kt — OpenAI-compatible HTTP API (Ktor/CIO)
+                        ChatCompletionsProcessor.kt — OpenAI request → engine mapping
+                        OpenAiModels.kt    — OpenAI JSON DTOs
 util/                   Fmt.kt             — human-readable byte/sha/speed formatting
 ```
 
@@ -34,6 +37,8 @@ util/                   Fmt.kt             — human-readable byte/sha/speed for
 | Material3      | 1.5.0-alpha14    |
 | compileSdk     | 36, minSdk 34    |
 | coroutines     | **1.9.0** ⚠     |
+| Ktor (server)  | 2.3.13           |
+| kotlinx-serialization | 1.7.3     |
 | LiteRT-LM      | 0.15.0           |
 | OkHttp         | 4.12.0           |
 | Coil           | 2.7.0            |
@@ -96,6 +101,24 @@ adb -s 56061FDCH008CK push /tmp/test.litertlm /sdcard/Download/
 # Watch engine activity
 adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 ```
+
+### OpenAI-compatible API
+- Ktor/CIO server in `server/`, bound to **127.0.0.1:8080 only** (never on the network).
+- Endpoints: `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (JSON or SSE
+  `text/event-stream` with `data: [DONE]` terminator). Everything else → OpenAI-style 404.
+- **Stateless per request**: the full `messages` array is flattened into one role-prefixed
+  prompt (`System:`/`User:`/`Assistant:`) and generated with `trackHistory=false`, so API
+  calls never read from or write to the app chat. `temperature`/`max_tokens` map to
+  `paramsOverride` in `engine.generate(...)`.
+- Content parts: `text`, `image_url` (data: URI or file:// only), `input_audio` (base64,
+  must be WAV — miniaudio constraint, same as the app UI).
+- One generation at a time (shared engine with the UI): busy → HTTP 429 `code:"busy"`.
+- Toggle: "API" button in the top bar (needs a loaded model). Server dies with the process —
+  no foreground service. Follow-ups: Bearer auth, configurable port, https image URLs.
+- Tests: `ChatCompletionsProcessorTest` (mapping/validation) + `OpenAiApiServerTest`
+  (route tests via ktor `testApplication`). **Test JVM must be Java 21+**: LiteRT-LM 0.15.0
+  ships Java 21 bytecode (class file 65) — `tasks.withType<Test> { javaLauncher }` in
+  app/build.gradle.kts pins it.
 
 ## Known limitations
 

@@ -165,10 +165,21 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
        * 
        * @param content List of content items (text and/or images)
        * @param template The prompt template to use
+       * @param trackHistory When false, the call is stateless: neither the current
+       *        conversation history is fed into the prompt nor is this turn stored
+       *        in it (used by the OpenAI-compatible API, which supplies full context
+       *        per request). Defaults to true for the app chat.
+       * @param paramsOverride Per-call generation parameters (e.g. temperature,
+       *        max_tokens from an API request); null uses the configured params.
        * @throws IllegalArgumentException if content is empty or invalid
        * @throws IllegalStateException if engine is not loaded
        */
-      override fun generate(content: List<Content>, template: PromptTemplate): Flow<String> {
+      override fun generate(
+          content: List<Content>,
+          template: PromptTemplate,
+          trackHistory: Boolean,
+          paramsOverride: GenerationParams?,
+      ): Flow<String> {
           require(content.isNotEmpty()) { "Content list cannot be empty" }
           require(content.size <= maxContentItems) { 
               "Content exceeds maximum of $maxContentItems items (got ${content.size})" 
@@ -200,23 +211,31 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                   }
               }
           }
-          return generateInternal(wrappedContent)
+          return generateInternal(wrappedContent, trackHistory, paramsOverride)
       }
 
-      private fun generateInternal(content: List<Content>): Flow<String> = flow {
+      private fun generateInternal(
+          content: List<Content>,
+          trackHistory: Boolean = true,
+          paramsOverride: GenerationParams? = null,
+      ): Flow<String> = flow {
           // Capture all state under mutex to prevent race conditions
           val state = mutex.withLock {
               val engineRef = engine
               val paramsRef = currentParams
               val systemPromptRef = currentSystemPrompt
               val backendRef = activeBackend
-              val historySnapshot = conversationHistory.toList()
-              
+
               if (engineRef == null || paramsRef == null) {
                   throw IllegalStateException("Engine is not loaded. Pick a model first.")
               }
-              
-              StateSnapshot(engineRef, paramsRef, systemPromptRef, backendRef, historySnapshot)
+
+              // Stateless calls (OpenAI API) skip history: the caller supplies the
+              // full context in every request, so nothing is read or stored.
+              val historySnapshot = if (trackHistory) conversationHistory.toList() else emptyList()
+              val effectiveParams = paramsOverride ?: paramsRef
+
+              StateSnapshot(engineRef, effectiveParams, systemPromptRef, backendRef, historySnapshot)
           }
 
           val startedAt = System.nanoTime()
@@ -250,11 +269,13 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
               mutex.withLock {
                   conversation?.close()
                   conversation = newConversation
-                  
-                  // Store the full response in history, evicting oldest if at limit
-                  conversationHistory.add(Pair(content, fullReply))
-                  if (conversationHistory.size > maxConversationHistory) {
-                      conversationHistory.removeAt(0)
+
+                  if (trackHistory) {
+                      // Store the full response in history, evicting oldest if at limit
+                      conversationHistory.add(Pair(content, fullReply))
+                      if (conversationHistory.size > maxConversationHistory) {
+                          conversationHistory.removeAt(0)
+                      }
                   }
               }
               

@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -62,6 +63,13 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests {
+            // Let android.util.Log etc. return defaults instead of throwing in JVM tests.
+            isReturnDefaultValues = true
+        }
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = false
@@ -96,8 +104,25 @@ dependencies {
     implementation(libs.litertlm.android)
     implementation(libs.coil.compose)
 
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.cors)
+    implementation(libs.ktor.server.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
+    testImplementation(libs.ktor.server.test.host)
+}
+
+tasks.withType<Test>().configureEach {
+    // LiteRT-LM 0.15.0 ships Java 21 bytecode (class file 65), so JVM unit tests
+    // need a Java 21+ runtime even though the app itself targets JVM 17.
+    javaLauncher.set(
+        javaToolchains.launcherFor {
+            languageVersion.set(org.gradle.jvm.toolchain.JavaLanguageVersion.of(21))
+        },
+    )
 }

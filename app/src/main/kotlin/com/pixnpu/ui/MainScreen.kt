@@ -80,6 +80,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val pendingAudio by vm.pendingAudio.collectAsStateWithLifecycle()
     val pendingTextFile by vm.pendingTextFile.collectAsStateWithLifecycle()
     val selectedModality by vm.selectedModality.collectAsStateWithLifecycle()
+    val apiServerEnabled by vm.apiServerEnabled.collectAsStateWithLifecycle()
 
     var showParams by remember { mutableStateOf(false) }
     val imeVisible = WindowInsets.isImeVisible
@@ -105,11 +106,27 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (apiServerEnabled) {
+                            Text(
+                                text = vm.apiServerUrl,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
                 },
                 actions = {
                     TextButton(onClick = { showParams = true }) {
                         Text("Params", color = MaterialTheme.colorScheme.primary)
+                    }
+                    TextButton(
+                        onClick = vm::toggleApiServer,
+                        enabled = apiServerEnabled || selectedModel != null,
+                    ) {
+                        Text(
+                            text = if (apiServerEnabled) "API: On" else "API",
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                     }
                     TextButton(
                         onClick = { vm.clearChat() },

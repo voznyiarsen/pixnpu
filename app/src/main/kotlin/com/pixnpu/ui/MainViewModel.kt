@@ -18,6 +18,7 @@ import com.pixnpu.model.ModelLoadStatus
 import com.pixnpu.model.ModelManager
 import com.pixnpu.model.ModelManagerInterface
 import com.pixnpu.engine.Modality
+import com.pixnpu.server.OpenAiApiServer
 import com.pixnpu.ui.components.pcm16ToWav
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
@@ -87,7 +88,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _engineMessage = MutableStateFlow<String?>(null)
     val engineMessage: StateFlow<String?> = _engineMessage.asStateFlow()
 
+    private val _apiServerEnabled = MutableStateFlow(false)
+    val apiServerEnabled: StateFlow<Boolean> = _apiServerEnabled.asStateFlow()
+
+    val apiServerUrl: String = "http://${OpenAiApiServer.HOST}:${OpenAiApiServer.PORT}"
+
     private var generationJob: Job? = null
+    private var apiServerJob: Job? = null
     private val messageId = AtomicLong(0)
 
     init {
@@ -155,9 +162,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      private val _selectedModality = MutableStateFlow(Modality.TextOnly)
      val selectedModality: StateFlow<Modality> = _selectedModality.asStateFlow()
 
-     fun setSelectedModality(modality: Modality) {
-         _selectedModality.value = modality
-     }
+    fun setSelectedModality(modality: Modality) {
+        _selectedModality.value = modality
+    }
+
+    /**
+     * Keeps the API server's view of the loaded model in sync with the UI state.
+     */
+    private fun syncServerModelId() {
+        container.openAiApiServer.currentModelId.set(
+            _selectedModel.value?.name?.removeSuffix(".litertlm"),
+        )
+    }
+
+    fun toggleApiServer() {
+        if (_apiServerEnabled.value) {
+            apiServerJob?.cancel()
+            apiServerJob = viewModelScope.launch {
+                withContext(Dispatchers.IO) { container.openAiApiServer.stop() }
+                _apiServerEnabled.value = false
+            }
+        } else {
+            if (!engine.isLoaded) {
+                _engineMessage.value = "Load a model before starting the API server"
+                return
+            }
+            apiServerJob?.cancel()
+            apiServerJob = viewModelScope.launch {
+                withContext(Dispatchers.IO) { container.openAiApiServer.start() }
+                _apiServerEnabled.value = true
+            }
+        }
+    }
 
      fun loadModel(model: LocalModel, modality: Modality = _selectedModality.value) {
 Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
@@ -200,6 +236,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
                     engine.clearHistory()
                 }
                 _selectedModel.value = model
+                syncServerModelId()
                 _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
                     this[model.name] = ModelLoadStatus.Success
                     this.keys.filter { it != model.name && this[it] == ModelLoadStatus.Unloading }.forEach {
@@ -210,6 +247,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Failed to load model: ${model.name}", e)
                 _selectedModel.value = null
+                syncServerModelId()
                 _engineMessage.value = e.message ?: "Failed to load model"
                 _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
                     this[model.name] = ModelLoadStatus.Failed
@@ -230,6 +268,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
                 _modelLoadStatus.value = _modelLoadStatus.value + (m.name to ModelLoadStatus.Unloading)
             }
             _selectedModel.value = null
+            syncServerModelId()
             try {
                 withContext(Dispatchers.IO) { engine.unload() }
             } finally {
@@ -245,6 +284,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
             if (_selectedModel.value?.absolutePath == model.absolutePath) {
                 withContext(Dispatchers.IO) { engine.unload() }
                 _selectedModel.value = null
+                syncServerModelId()
             }
             _modelLoadStatus.value = _modelLoadStatus.value - model.name
             manager.delete(model)
@@ -447,6 +487,11 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
     override fun onCleared() {
         cleanupTempImages()
         CoroutineScope(Dispatchers.IO).launch {
+            try {
+                container.openAiApiServer.stop()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to stop API server on clear", e)
+            }
             try {
                 engine.unload()
             } catch (e: Exception) {

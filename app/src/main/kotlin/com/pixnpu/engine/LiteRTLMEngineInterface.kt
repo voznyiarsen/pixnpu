@@ -53,9 +53,19 @@ interface LiteRTLMEngineInterface {
      * Generate a response from multimodal content
      * @param content The list of content items (text and/or images)
      * @param template The prompt template to use
+     * @param trackHistory Whether this turn should be read from and stored in the
+     *        conversation history. Set to false for stateless calls (e.g. the
+     *        OpenAI-compatible API) where the caller supplies the full context.
+     * @param paramsOverride Generation parameters for this call only; when null the
+     *        currently configured params are used
      * @return A flow of generated text chunks
      */
-    fun generate(content: List<Content>, template: PromptTemplate = PromptTemplate.Auto): Flow<String>
+    fun generate(
+        content: List<Content>,
+        template: PromptTemplate = PromptTemplate.Auto,
+        trackHistory: Boolean = true,
+        paramsOverride: GenerationParams? = null,
+    ): Flow<String>
     
     /**
      * Cancel the current generation
