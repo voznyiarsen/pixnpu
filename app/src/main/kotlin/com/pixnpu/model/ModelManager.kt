@@ -70,7 +70,7 @@ class ModelManager(private val context: Context) : ModelManagerInterface {
     private var operationJob: Job? = null
 
     init {
-        refresh()
+        scope.launch { refresh() }
     }
 
     override fun refresh() {

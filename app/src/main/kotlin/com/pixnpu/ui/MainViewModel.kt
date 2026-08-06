@@ -485,7 +485,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
                 syncServerModelId()
             }
             _modelLoadStatus.value = _modelLoadStatus.value - model.name
-            manager.delete(model)
+            withContext(Dispatchers.IO) { manager.delete(model) }
         }
     }
 
