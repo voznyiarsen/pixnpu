@@ -92,4 +92,57 @@ class MarkdownParserTest {
         val blocks = parseBlocks("a - b")
         assertTrue(blocks[0] is MdBlock.Paragraph)
     }
+
+    @Test
+    fun simple_table() {
+        val blocks = parseBlocks("| Name | Age |\n|------|-----|\n| Ada  | 36  |\n| Bob  | 42  |")
+        assertEquals(1, blocks.size)
+        val table = blocks[0] as MdBlock.Table
+        assertEquals(2, table.columns)
+        assertEquals("Name", texts(table.header[0]))
+        assertEquals("Age", texts(table.header[1]))
+        assertEquals(2, table.rows.size)
+        assertEquals("Ada", texts(table.rows[0][0]))
+        assertEquals("36", texts(table.rows[0][1]))
+    }
+
+    @Test
+    fun table_without_leading_and_trailing_pipes() {
+        val blocks = parseBlocks("A | B\n--- | ---\n1 | 2")
+        val table = blocks[0] as MdBlock.Table
+        assertEquals(2, table.columns)
+        assertEquals("1", texts(table.rows[0][0]))
+    }
+
+    @Test
+    fun table_with_alignment_colons() {
+        val blocks = parseBlocks("| Q | A |\n|:-:|---:|\n| x | y |")
+        val table = blocks[0] as MdBlock.Table
+        assertEquals(2, table.columns)
+        assertEquals(1, table.rows.size)
+    }
+
+    @Test
+    fun table_cells_support_inline_formatting() {
+        val blocks = parseBlocks("| **bold** | `code` |\n|---|---|\n| *it* | plain |")
+        val table = blocks[0] as MdBlock.Table
+        assertEquals(MdSpan.Bold(listOf(MdSpan.Text("bold"))), table.header[0].single())
+        assertEquals(MdSpan.InlineCode("code"), table.header[1].single())
+        assertEquals(MdSpan.Italic(listOf(MdSpan.Text("it"))), table.rows[0][0].single())
+    }
+
+    @Test
+    fun pipe_line_without_separator_is_paragraph() {
+        val blocks = parseBlocks("| not a table\njust text")
+        assertTrue(blocks[0] is MdBlock.Paragraph)
+        assertEquals("| not a table just text", texts((blocks[0] as MdBlock.Paragraph).spans))
+    }
+
+    @Test
+    fun ragged_rows_render_padded_to_column_count() {
+        val blocks = parseBlocks("| A | B | C |\n|---|---|---|\n| only one |")
+        val table = blocks[0] as MdBlock.Table
+        assertEquals(3, table.columns)
+        assertEquals(1, table.rows[0].size)
+    }
 }

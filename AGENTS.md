@@ -165,8 +165,11 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 
 ### Chat UI
 - **Markdown rendering on by default** (`Markdown.kt`): headings, bold/italic,
-  inline code, links, bullet/ordered lists, blockquotes, horizontal rules —
-  rendered on top of the existing fenced-code highlighter (`CodeHighlight.kt`).
+  inline code, links, bullet/ordered lists, blockquotes, horizontal rules,
+  **GFM tables** (header + `---` separator with alignment colons, leading/
+  trailing pipes optional, single-dash cells like `|:-:|`; column widths are
+  proportional to the longest cell text) — rendered on top of the existing
+  fenced-code highlighter (`CodeHighlight.kt`).
   **"Render Markdown" toggle in Settings** (prefs `markdown_enabled`, default
   true) falls back to plain text when off. `StreamingText` gained a
   `markdownEnabled` param; parser (`parseBlocks`/`parseInline`) is internal and
