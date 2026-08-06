@@ -20,6 +20,17 @@ class AppLogTest {
     }
 
     @Test
+    fun identicalLinesGetUniqueIdsAfterAppend() {
+        val first = AppLog.parseLine("08-06 12:34:56.789  1234  5678 E Tag: boom")!!
+        val second = AppLog.parseLine("08-06 12:34:56.789  1234  5678 E Tag: boom")!!
+        AppLog.append(first)
+        AppLog.append(second)
+        val entries = AppLog.entries.value
+        assertEquals(2, entries.size)
+        assertEquals(entries[0].id + 1, entries[1].id)
+    }
+
+    @Test
     fun parsesDebugLine() {
         val entry = AppLog.parseLine(
             "08-06 12:34:56.789  1234  5678 D ModelManager: download progress 42%",

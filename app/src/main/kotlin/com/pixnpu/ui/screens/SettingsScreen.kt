@@ -691,7 +691,7 @@ private fun AppLogSection() {
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
         ) {
-            items(visible, key = { it.hashCode() }) { entry ->
+            items(visible, key = { it.id }) { entry ->
                 LogEntryRow(entry)
             }
         }

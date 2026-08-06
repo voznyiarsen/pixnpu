@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 object AppLog {
 
     data class Entry(
+        val id: Long,
         val timeMs: Long,
         val priority: Char,
         val tag: String,
@@ -46,6 +47,8 @@ object AppLog {
 
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
     val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
+
+    private val nextId = java.util.concurrent.atomic.AtomicLong(0)
 
     @Volatile
     private var started = false
@@ -80,9 +83,9 @@ object AppLog {
         _entries.value = emptyList()
     }
 
-    private fun append(entry: Entry?) {
+    internal fun append(entry: Entry?) {
         if (entry == null) return
-        _entries.update { (it + entry).takeLast(MAX_ENTRIES) }
+        _entries.update { (it + entry.copy(id = nextId.incrementAndGet())).takeLast(MAX_ENTRIES) }
     }
 
     private val threadtimePattern: Pattern = Pattern.compile(
@@ -96,6 +99,7 @@ object AppLog {
         val tag = matcher.group(2)
         val message = matcher.group(3)
         return Entry(
+            id = 0L,
             timeMs = System.currentTimeMillis(),
             priority = priority,
             tag = tag,
