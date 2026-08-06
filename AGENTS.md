@@ -36,7 +36,7 @@ util/                   Fmt.kt             — human-readable byte/sha/speed for
 | Compose BOM    | 2025.10.00       |
 | Material3      | 1.5.0-alpha14    |
 | compileSdk     | 36, minSdk 34    |
-| coroutines     | **1.9.0** ⚠     |
+| coroutines     | **1.11.0** ⚠     |
 | Ktor (server)  | 2.3.13           |
 | kotlinx-serialization | 1.7.3     |
 | LiteRT-LM      | 0.15.0           |
@@ -45,9 +45,9 @@ util/                   Fmt.kt             — human-readable byte/sha/speed for
 
 ---
 
-## ⚠️ Critical: kotlinx-coroutines 1.9.0 ↔ LiteRT-LM 0.15.0 Incompatibility
+## ⚠️ Critical: coroutines version ↔ LiteRT-LM 0.15.0 ABI (RESOLVED in 1.11.0)
 
-`sendMessageAsync` (the async streaming API) **crashes the process** on this build
+`sendMessageAsync` (the async streaming API) **crashed the process** on this build
 with an uncatchable `NoSuchMethodError`:
 
 ```
@@ -55,23 +55,29 @@ java.lang.NoSuchMethodError: No static method close$default(
   Lkotlinx/coroutines/channels/SendChannel;Ljava/lang/Throwable;ILjava/lang/Object;)Z
 ```
 
-**Root cause:** LiteRT-LM's JNI callback thread invokes
-`SendChannel.close$default`, a method whose binary signature changed between
-coroutines versions. The app ships coroutines 1.9.0 (pinned — see build config),
-but the LiteRT-LM native library was compiled against a different coroutines ABI.
+**Root cause (verified against the AAR):** LiteRT-LM 0.15.0's
+`Conversation$sendMessageAsync$1$1` bytecode calls
+`SendChannel.close$default(...)` as a static method **on the `SendChannel`
+interface itself**. That static only exists on the interface in coroutines
+**1.11.0** (verified with `javap`: 1.6.4/1.9.0/1.10.2 put it on
+`SendChannel$DefaultImpls` instead, and a JVM `invokestatic` on the interface
+does not resolve to `DefaultImpls`). With coroutines < 1.11.0 the resolution
+failed on the JNI callback thread and killed the process — try/catch on the
+collecting coroutine never saw it.
 
-**Why try/catch doesn't help:** the error is thrown on a native JNI callback thread
-(`Thread-15`), not on the Kotlin coroutine that called `collect`. By the time the
-exception surfaces, the process is already being killed.
+**Fix:** coroutines is pinned to **1.11.0** (see build config). Native streaming
+in `LiteRTLMEngine.generateInternal` uses `conversation.sendMessageAsync(...)`
+and emits real per-token deltas (`Content.Text`). A synchronous
+`sendMessage` fallback (word-sized chunks + 8 ms delay) remains in a catch
+block — do not remove it without on-device verification.
 
-**Workaround in code:** `LiteRTLMEngine.generate()` does **not** call
-`sendMessageAsync`. It uses the synchronous `conversation.sendMessage(contents)`
-on `Dispatchers.Default`, then emits the reply in word-sized chunks with an 8 ms
-delay to simulate token streaming for the UI.
+**Why try/catch doesn't help (historical):** with the old 1.9.0 pin the error
+was thrown on a native JNI callback thread (`Thread-15`), not on the Kotlin
+coroutine that called `collect` — by the time it surfaced the process was dead.
 
-**Do NOT "fix" by bumping coroutines.** Version 1.9.0 is intentionally pinned.
-Bumping to 1.10+ may resolve the `SendChannel` ABI mismatch, but it has not been
-tested and may break other behavior. Document any change here if you do.
+**Do NOT downgrade coroutines below 1.11.0.** Anything lower re-introduces the
+crash. If a future LiteRT-LM bump changes the AAR, re-verify with `javap` before
+trusting a new version.
 
 ---
 
@@ -122,9 +128,10 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   `max_tokens`/`max_completion_tokens` map to `paramsOverride` in `engine.generate(...)`.
   `n` is accepted only as 1 (else 400, `param:"n"`); unknown params are ignored
   (vLLM/llama.cpp convention); `max_tokens` + `max_completion_tokens` together → 400.
-- Streaming honors `stream_options.include_usage`: a final usage chunk with empty
-  `choices` is emitted before `[DONE]`. Chunks are word-sized (engine limitation,
-  not real tokens — see Known limitations).
+- Streaming: real per-token deltas from `sendMessageAsync` (coroutines 1.11 ABI
+  fix — see the critical section above). `stream_options.include_usage` still
+  emits a final usage chunk with empty `choices` before `[DONE]`; usage is
+  estimated from character counts (engine has no tokenizer).
 - Content parts: `text`, `image_url` (data: URI or file:// only), `input_audio` (base64,
   must be WAV — miniaudio constraint, same as the app UI).
 - One generation at a time (shared engine with the UI): busy → HTTP 429 `code:"busy"`.
@@ -138,8 +145,11 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 
 ## Known limitations
 
-1. **No true native streaming** — works around the coroutines ABI crash with a
-   simulated word-by-word emission (8 ms per chunk).
+1. **Usage is estimated, not counted** — the engine has no tokenizer, so
+   `usage` in OpenAI responses is derived from character counts. Streaming is
+   now native (real per-token deltas via `sendMessageAsync` on coroutines
+   1.11.0); a synchronous word-chunk fallback remains in a catch block until
+   verified on-device.
 2. **functiongemma-270m-G5.litertlm warmup fails on NPU** on Pixel 10 Pro (this
    build) — `No dispatch library found in .../lib/arm64`. `gemma3-270m-it-q8`
    works on NPU. The load-time warmup in `LiteRTLMEngine` is **non-fatal**: it

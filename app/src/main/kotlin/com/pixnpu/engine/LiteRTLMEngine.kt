@@ -241,6 +241,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
           val startedAt = System.nanoTime()
           var firstTokenAt: Long? = null
           var textLength = 0
+          val fullReply = StringBuilder()
 
           Log.d("LiteRTLMEngine", "Starting generation (history turns: ${state.history.size}, backend: ${state.backend?.label})")
 
@@ -260,46 +261,78 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
               val contents = Contents.of(content)
               Log.d("LiteRTLMEngine", "Starting generation on backend: ${state.backend?.label}")
 
-              // Generate with cleaned history - pass snapshot to avoid holding mutex during generation
-              val (newConversation, fullReply) = withContext(Dispatchers.Default) {
-                  generateWithCleanedHistory(contents, state.engine, state.params, state.systemPrompt, state.backend, state.history)
+              val newConversation = withContext(Dispatchers.Default) {
+                  buildConversationWithCleanedHistory(contents, state.engine, state.params, state.systemPrompt, state.backend, state.history)
               }
-              
-              // Update conversation and history atomically
+
+              // Swap conversation before streaming so cancel() targets the live one
               mutex.withLock {
                   conversation?.close()
                   conversation = newConversation
+              }
 
+              var streamedTokens = 0
+              try {
+                  // Native token streaming: LiteRT-LM invokes the callback on a JNI
+                  // thread and sendMessageAsync forwards each token delta through a
+                  // coroutines channel. Requires coroutines 1.11+ (see AGENTS.md —
+                  // the SendChannel.close$default ABI this bytecode needs is absent
+                  // in 1.9.0, which killed the process).
+                  newConversation.sendMessageAsync(contents).collect { message ->
+                      val tokenText = message.contents.contents
+                          .filterIsInstance<Content.Text>()
+                          .joinToString("") { it.text }
+                      if (tokenText.isEmpty()) return@collect
+                      fullReply.append(tokenText)
+                      streamedTokens++
+                      if (firstTokenAt == null) {
+                          val now = System.nanoTime()
+                          firstTokenAt = now
+                          val ttft = (now - startedAt) / 1_000_000L
+                          mutex.withLock {
+                              _metrics.value = _metrics.value.copy(ttftMs = ttft)
+                          }
+                      }
+                      emit(tokenText)
+                  }
+              } catch (e: Exception) {
+                  // Fallback: synchronous generation with word-sized chunk emission
+                  // (the pre-1.11 workaround).
+                  Log.w("LiteRTLMEngine", "Native streaming failed, falling back to sync generation", e)
+                  val reply = newConversation.sendMessage(contents).toString()
+                  fullReply.append(reply)
+                  if (reply.isNotEmpty()) {
+                      val chunks = reply.split(" ").filter { it.isNotEmpty() }
+                      var emitted = 0
+                      for (chunk in chunks) {
+                          val token = if (emitted == 0) chunk else " $chunk"
+                          emitted++
+                          if (firstTokenAt == null) {
+                              val now = System.nanoTime()
+                              firstTokenAt = now
+                              val ttft = (now - startedAt) / 1_000_000L
+                              mutex.withLock {
+                                  _metrics.value = _metrics.value.copy(ttftMs = ttft)
+                              }
+                          }
+                          emit(token)
+                          if (emitted < chunks.size) delay(8)
+                      }
+                  }
+              }
+
+              val finalReply = fullReply.toString()
+              mutex.withLock {
                   if (trackHistory) {
                       // Store the full response in history, evicting oldest if at limit
-                      conversationHistory.add(Pair(content, fullReply))
+                      conversationHistory.add(Pair(content, finalReply))
                       if (conversationHistory.size > maxConversationHistory) {
                           conversationHistory.removeAt(0)
                       }
                   }
               }
-              
-              Log.d("LiteRTLMEngine", "Generated response (${fullReply.length} chars), stored in history")
-
-              if (fullReply.isNotEmpty()) {
-                  val chunks = fullReply.split(" ").filter { it.isNotEmpty() }
-                  var emitted = 0
-                  for (chunk in chunks) {
-                      val token = if (emitted == 0) chunk else " $chunk"
-                      emitted++
-                      if (firstTokenAt == null) {
-                          firstTokenAt = System.nanoTime()
-                          val ttft = (firstTokenAt - startedAt) / 1_000_000L
-                          mutex.withLock {
-                              _metrics.value = _metrics.value.copy(ttftMs = ttft)
-                          }
-                          textLength = tokenEstimate(token)
-                      }
-                      emit(token)
-                      if (emitted < chunks.size) delay(8)
-                  }
-                  textLength = tokenEstimate(fullReply)
-              }
+              textLength = tokenEstimate(finalReply)
+              Log.d("LiteRTLMEngine", "Streamed $streamedTokens tokens (${finalReply.length} chars), stored in history")
 
           } catch (e: Exception) {
               Log.e("LiteRTLMEngine", "Generation failed", e)
@@ -331,21 +364,19 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
       )
      
       /**
-       * Generates a response with cleaned conversation history.
-       * Creates a new conversation for each turn, feeding it history with reasoning stripped
+       * Builds a fresh conversation for a turn, feeding it history with reasoning stripped
        * from assistant responses to prevent template mismatch errors.
-       * 
+       *
        * @param history Previous conversation turns (userContent, assistantResponse)
-       * @return Pair of (newConversation, fullReplyWithReasoning)
        */
-      private suspend fun generateWithCleanedHistory(
+      private suspend fun buildConversationWithCleanedHistory(
           newUserContent: Contents,
           engineRef: Engine,
           params: GenerationParams,
           systemPrompt: String,
           backend: ActiveBackend?,
           history: List<Pair<List<Content>, String>>
-      ): Pair<Conversation, String> {
+      ): Conversation {
           Log.d("LiteRTLMEngine", "Building cleaned history with ${history.size} previous turns")
           
           // Build history with reasoning stripped from assistant messages
@@ -389,11 +420,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
           val fullPromptContents = Contents.of(historyContents)
           Log.d("LiteRTLMEngine", "Sending message with ${historyContents.size} history items")
           
-          // Generate response
-          val fullReply = newConversation.sendMessage(fullPromptContents).toString()
-          Log.d("LiteRTLMEngine", "Received full reply (${fullReply.length} chars)")
-          
-          return Pair(newConversation, fullReply)
+          return newConversation
       }
 
     override fun cancel() {
