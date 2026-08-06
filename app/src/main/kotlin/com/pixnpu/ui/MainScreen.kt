@@ -101,6 +101,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val pendingImageUri by vm.pendingImageUri.collectAsStateWithLifecycle()
     val pendingAudio by vm.pendingAudio.collectAsStateWithLifecycle()
     val pendingTextFile by vm.pendingTextFile.collectAsStateWithLifecycle()
+    val pendingVideo by vm.pendingVideo.collectAsStateWithLifecycle()
     val selectedModality by vm.selectedModality.collectAsStateWithLifecycle()
     val apiServerEnabled by vm.apiServerEnabled.collectAsStateWithLifecycle()
     val apiHost by vm.apiHost.collectAsStateWithLifecycle()
@@ -246,6 +247,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  pendingImageUri = pendingImageUri,
                             pendingAudio = pendingAudio,
                             pendingTextFile = pendingTextFile,
+                            pendingVideo = pendingVideo,
                             onSend = vm::send,
                             onStop = vm::stop,
                             onPickImage = {
@@ -256,8 +258,10 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                              onClearImage = { vm.setPendingImage(null) },
                             onSetAudio = { vm.setPendingAudio(it) },
                             onSetTextFile = { vm.setPendingTextFile(it) },
+                            onSetVideo = { vm.setPendingVideo(it) },
                              supportsVision = metrics.supportsVision,
                              supportsAudio = metrics.supportsAudio,
+                             supportsVideo = metrics.supportsVideo,
                              markdownEnabled = markdownEnabled,
                          )
                              Screen.MODELS -> ModelSelectorScreen(

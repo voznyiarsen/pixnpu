@@ -20,4 +20,5 @@ data class InferenceMetrics(
     val currentTokensPerSecond: Double = 0.0,
     val supportsVision: Boolean = false,
     val supportsAudio: Boolean = false,
+    val supportsVideo: Boolean = false,
 )

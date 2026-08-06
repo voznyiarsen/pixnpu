@@ -12,4 +12,5 @@ enum class Modality(val label: String, val supportsVision: Boolean, val supports
     AudioOnly("Audio", false, true),
     VisionOnly("Vision", true, false),
     AudioAndVision("Audio + Vision", true, true),
+    Video("Video", true, true),
 }

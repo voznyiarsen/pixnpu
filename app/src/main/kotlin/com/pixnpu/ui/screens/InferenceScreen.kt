@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -74,6 +75,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -82,6 +88,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
@@ -90,12 +97,15 @@ import com.pixnpu.ui.AudioClip
 import com.pixnpu.ui.ChatMessage
 import com.pixnpu.ui.ChatRole
 import com.pixnpu.ui.TextFileClip
+import com.pixnpu.ui.VideoClip
 import com.pixnpu.ui.components.AudioFileDecodeResult
 import com.pixnpu.ui.components.AudioRecorder
 import com.pixnpu.ui.components.AudioRecorderPanel
 import com.pixnpu.ui.components.StreamingText
 import com.pixnpu.ui.components.decodeAudioFileToPcm
 import com.pixnpu.ui.components.pcmBytesToDurationMs
+import com.pixnpu.ui.components.readVideoClip
+import com.pixnpu.util.Fmt
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -111,8 +121,10 @@ fun InferenceScreen(
     pendingImageUri: Uri?,
     pendingAudio: AudioClip?,
     pendingTextFile: TextFileClip?,
+    pendingVideo: VideoClip?,
     supportsVision: Boolean = true,
     supportsAudio: Boolean = true,
+    supportsVideo: Boolean = false,
     markdownEnabled: Boolean = true,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
@@ -120,6 +132,7 @@ fun InferenceScreen(
     onClearImage: () -> Unit,
     onSetAudio: (AudioClip?) -> Unit,
     onSetTextFile: (TextFileClip?) -> Unit,
+    onSetVideo: (VideoClip?) -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -166,6 +179,22 @@ fun InferenceScreen(
                     else -> {
                         attachError = null
                         onSetTextFile(result)
+                    }
+                }
+            }
+        }
+    }
+
+    val videoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                when (val result = readVideoClip(context, uri)) {
+                    null -> attachError = "Failed to read video"
+                    else -> {
+                        attachError = null
+                        onSetVideo(result)
                     }
                 }
             }
@@ -262,11 +291,12 @@ fun InferenceScreen(
             pendingImageUri = pendingImageUri,
             pendingAudio = pendingAudio,
             pendingTextFile = pendingTextFile,
+            pendingVideo = pendingVideo,
             supportsVision = supportsVision,
             supportsAudio = supportsAudio,
             onValueChange = { input = it },
             onSend = {
-                if (input.isNotBlank() || pendingImageUri != null || pendingAudio != null || pendingTextFile != null) {
+                if (input.isNotBlank() || pendingImageUri != null || pendingAudio != null || pendingTextFile != null || pendingVideo != null) {
                     onSend(input)
                     input = ""
                 }
@@ -276,6 +306,7 @@ fun InferenceScreen(
             onClearImage = onClearImage,
             onClearAudio = { onSetAudio(null) },
             onClearTextFile = { onSetTextFile(null) },
+            onClearVideo = { onSetVideo(null) },
             focusRequester = focusRequester,
             modifier = Modifier
                 .fillMaxWidth()
@@ -307,6 +338,12 @@ fun InferenceScreen(
                     showAttachSheet = false
                     textFileLauncher.launch(arrayOf("text/*"))
                 })
+                if (supportsVideo) {
+                    add(AttachOptionSpec(Icons.Outlined.VideoFile, "Video") {
+                        showAttachSheet = false
+                        videoLauncher.launch(arrayOf("video/*"))
+                    })
+                }
             }
             if (options.isEmpty()) {
                 Text(
@@ -435,6 +472,42 @@ private fun MessageBubble(message: ChatMessage, markdownEnabled: Boolean = true)
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                             )
                         }
+                        message.video?.let { clip ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.VideoFile,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = clip.name,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (clip.durationMs > 0L) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = Fmt.duration(clip.durationMs),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         if (message.text.isNotBlank()) {
                             Text(
                                 text = message.text,
@@ -481,8 +554,10 @@ private fun InputBar(
     pendingImageUri: Uri?,
     pendingAudio: AudioClip?,
     pendingTextFile: TextFileClip?,
+    pendingVideo: VideoClip?,
     supportsVision: Boolean = true,
     supportsAudio: Boolean = true,
+    supportsVideo: Boolean = true,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -490,6 +565,7 @@ private fun InputBar(
     onClearImage: () -> Unit,
     onClearAudio: () -> Unit,
     onClearTextFile: () -> Unit,
+    onClearVideo: () -> Unit,
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
@@ -567,9 +643,42 @@ private fun InputBar(
                     }
                 }
             }
+            pendingVideo?.let { clip ->
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.VideoFile,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = clip.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (clip.durationMs > 0L) {
+                        Text(
+                            text = Fmt.duration(clip.durationMs),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                    }
+                    TextButton(onClick = onClearVideo) {
+                        Text("Remove", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
 
              Row(verticalAlignment = Alignment.CenterVertically) {
-                val canAttach = supportsVision || supportsAudio
+                val canAttach = supportsVision || supportsAudio || supportsVideo
                 IconButton(
                     onClick = onAttachClick,
                     enabled = canAttach && !isRecording,
@@ -589,7 +698,27 @@ private fun InputBar(
                     modifier = Modifier
                         .weight(1f)
                         .focusRequester(focusRequester)
-                        .heightIn(min = 56.dp, max = 160.dp),
+                        .heightIn(min = 56.dp, max = 160.dp)
+                        .onPreviewKeyEvent { event ->
+                            // Catch both backspace (KEYCODE_DEL) and shift+backspace
+                            // (KEYCODE_FORWARD_DEL): with an empty input they clear the
+                            // pending attachment instead of doing nothing. Otherwise the
+                            // event falls through to normal text editing.
+                            if (event.type == KeyEventType.KeyUp &&
+                                (event.key == Key.Backspace || event.key == Key.Delete) &&
+                                value.isEmpty()
+                            ) {
+                                when {
+                                    pendingImageUri != null -> { onClearImage(); true }
+                                    pendingAudio != null -> { onClearAudio(); true }
+                                    pendingTextFile != null -> { onClearTextFile(); true }
+                                    pendingVideo != null -> { onClearVideo(); true }
+                                    else -> false
+                                }
+                            } else {
+                                false
+                            }
+                        },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
                         color = MaterialTheme.colorScheme.onSurface,
                     ),
@@ -631,7 +760,7 @@ private fun InputBar(
                         )
                     }
                 } else {
-                    val canSend = value.isNotBlank() || pendingImageUri != null || pendingAudio != null || pendingTextFile != null
+                    val canSend = value.isNotBlank() || pendingImageUri != null || pendingAudio != null || pendingTextFile != null || pendingVideo != null
                     FilledIconButton(
                         onClick = onSend,
                         enabled = canSend,

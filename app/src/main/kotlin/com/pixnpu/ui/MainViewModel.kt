@@ -21,6 +21,9 @@ import com.pixnpu.model.ModelManager
 import com.pixnpu.model.ModelManagerInterface
 import com.pixnpu.engine.Modality
 import com.pixnpu.server.OpenAiApiServer
+import com.pixnpu.ui.components.AudioFileDecodeResult
+import com.pixnpu.ui.components.decodeAudioFileToPcm
+import com.pixnpu.ui.components.extractVideoFrames
 import com.pixnpu.ui.components.pcm16ToWav
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
@@ -117,6 +120,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _pendingTextFile = MutableStateFlow<TextFileClip?>(null)
     val pendingTextFile: StateFlow<TextFileClip?> = _pendingTextFile.asStateFlow()
+
+    private val _pendingVideo = MutableStateFlow<VideoClip?>(null)
+    val pendingVideo: StateFlow<VideoClip?> = _pendingVideo.asStateFlow()
 
     private val _engineMessage = MutableStateFlow<String?>(null)
     val engineMessage: StateFlow<String?> = _engineMessage.asStateFlow()
@@ -512,6 +518,17 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         _pendingTextFile.value = clip
     }
 
+    fun setPendingVideo(clip: VideoClip?) {
+        if (clip != null) {
+            // A video is frame+audio content: it replaces any other attachment
+            // (a combined turn would blow the engine's 10 content-item cap).
+            _pendingImageUri.value = null
+            _pendingAudio.value = null
+            _pendingTextFile.value = null
+        }
+        _pendingVideo.value = clip
+    }
+
     /**
      * Maximum prompt length in characters
      */
@@ -527,9 +544,10 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         val imageUri = _pendingImageUri.value
         val audio = _pendingAudio.value
         val textFile = _pendingTextFile.value
+        val video = _pendingVideo.value
         
         // Validate input
-        if (prompt.isEmpty() && imageUri == null && audio == null && textFile == null) return
+        if (prompt.isEmpty() && imageUri == null && audio == null && textFile == null && video == null) return
         if (prompt.isNotEmpty() && prompt.length > maxPromptLength) {
             _engineMessage.value = "Prompt exceeds maximum length of $maxPromptLength characters"
             return
@@ -544,7 +562,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
             return
         }
 
-        Log.d("MainViewModel", "Sending prompt (${prompt.length} chars, image=${imageUri != null}, audio=${audio != null}, file=${textFile != null})")
+        Log.d("MainViewModel", "Sending prompt (${prompt.length} chars, image=${imageUri != null}, audio=${audio != null}, file=${textFile != null}, video=${video != null})")
         val userMessage = ChatMessage(
             id = messageId.incrementAndGet(),
             role = ChatRole.USER,
@@ -552,6 +570,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
             imageUri = imageUri,
             audioBytes = audio?.bytes,
             textFile = textFile,
+            video = video,
         )
         val assistantMessage =
             ChatMessage(messageId.incrementAndGet(), ChatRole.ASSISTANT, "", streaming = true)
@@ -567,11 +586,30 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         _pendingImageUri.value = null
         _pendingAudio.value = null
         _pendingTextFile.value = null
+        _pendingVideo.value = null
         _isGenerating.value = true
 
         generationJob = viewModelScope.launch {
             try {
                 val contentList = buildList {
+                    if (video != null) {
+                        // Video = sampled frames (ImageFile) + audio track (WAV-wrapped
+                        // AudioBytes). Frames come first so the audio/token stream follows.
+                        val framePaths = extractVideoFrames(
+                            getApplication(), video.uri, tempMediaDir(),
+                        )
+                        if (framePaths.isEmpty()) {
+                            _engineMessage.value = "Could not extract frames from video"
+                        } else {
+                            framePaths.forEach { add(Content.ImageFile(it)) }
+                            val audioResult = decodeAudioFileToPcm(getApplication(), video.uri)
+                            if (audioResult is AudioFileDecodeResult.Success) {
+                                add(Content.AudioBytes(pcm16ToWav(audioResult.clip.bytes)))
+                            } else {
+                                Log.w("MainViewModel", "Video audio decode failed: ${(audioResult as? AudioFileDecodeResult.Failure)?.message}")
+                            }
+                        }
+                    }
                     if (audio != null) {
                         // LiteRT-LM's native preprocessor (miniaudio) needs a container
                         // header to decode audio; raw PCM fails with error -10.
@@ -639,6 +677,10 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
     }
 
     private val tempImageFiles = mutableListOf<File>()
+    private val tempVideoFiles = mutableListOf<File>()
+
+    private fun tempMediaDir(): File =
+        File(getApplication<Application>().cacheDir, "media").apply { mkdirs() }
 
     private fun resolveImagePath(uri: Uri): String? {
         val context = getApplication<Application>()
@@ -655,11 +697,15 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         }
     }
 
-    private fun cleanupTempImages() {
-        for (file in tempImageFiles) {
+    private fun cleanupTempMedia() {
+        for (file in tempImageFiles + tempVideoFiles) {
             runCatching { if (file.exists()) file.delete() }
         }
         tempImageFiles.clear()
+        tempVideoFiles.clear()
+        runCatching {
+            tempMediaDir().listFiles()?.forEach { it.delete() }
+        }
     }
 
     fun stop() {
@@ -682,7 +728,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
     }
 
     override fun onCleared() {
-        cleanupTempImages()
+        cleanupTempMedia()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 container.openAiApiServer.stop()

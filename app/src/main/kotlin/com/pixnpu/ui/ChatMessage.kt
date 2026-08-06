@@ -27,6 +27,16 @@ data class TextFileClip(
     val truncated: Boolean = false,
 )
 
+/**
+ * A video picked from storage. The audio track and sampled frames are extracted
+ * at send time (see VideoFile.kt) and fed to the model as AudioBytes + ImageFiles.
+ */
+data class VideoClip(
+    val uri: Uri,
+    val name: String,
+    val durationMs: Long,
+)
+
 data class ChatMessage(
     val id: Long,
     val role: ChatRole,
@@ -35,4 +45,5 @@ data class ChatMessage(
     val imageUri: Uri? = null,
     val audioBytes: ByteArray? = null,
     val textFile: TextFileClip? = null,
+    val video: VideoClip? = null,
 )

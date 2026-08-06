@@ -72,8 +72,9 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
       * down-grading. Non-textual input is offered only for models loaded with the
       * matching [Modality].
       */
-     val supportsVision: Boolean get() = threadSafe { activeSupportsVision }
-     val supportsAudio: Boolean get() = threadSafe { activeSupportsAudio }
+      val supportsVision: Boolean get() = threadSafe { activeSupportsVision }
+      val supportsAudio: Boolean get() = threadSafe { activeSupportsAudio }
+      val supportsVideo: Boolean get() = threadSafe { activeSupportsVision && activeSupportsAudio }
 
      override suspend fun load(modelPath: String, params: GenerationParams, modality: Modality): ActiveBackend =
          mutex.withLock {
@@ -95,6 +96,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                  maxContextTokens = params.contextTokens,
                  supportsVision = modality.supportsVision,
                  supportsAudio = modality.supportsAudio,
+                 supportsVideo = modality.supportsVision && modality.supportsAudio,
              )
              Log.d("LiteRTLMEngine", "Model loaded on backend: ${init.backend.label} " +
                  "(vision=${modality.supportsVision}, audio=${modality.supportsAudio})")

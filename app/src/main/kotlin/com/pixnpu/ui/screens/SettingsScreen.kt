@@ -1,8 +1,10 @@
 package com.pixnpu.ui.screens
 
+import android.os.Process
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,7 +14,11 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -23,6 +29,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -38,16 +45,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pixnpu.BuildConfig
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.Modality
 import com.pixnpu.engine.PromptTemplate
 import com.pixnpu.engine.SamplingPreset
 import com.pixnpu.server.OpenAiApiServer
+import com.pixnpu.util.AppLog
+import java.text.SimpleDateFormat
 import java.util.Locale
 
 /**
@@ -480,6 +492,8 @@ private fun ModalityDropdown(
 }
 
 private fun modalityDescription(modality: Modality): String = when {
+    modality == Modality.Video ->
+        "Frames on the GPU backend · audio on the CPU backend"
     modality.supportsVision && modality.supportsAudio ->
         "Images on the GPU backend · audio on the CPU backend"
     modality.supportsVision -> "Images via the GPU backend"
@@ -608,7 +622,99 @@ private fun GenerationParamsSection(
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
         )
+
+        AppLogSection()
     }
+}
+
+private enum class LogFilter(val label: String, val minLevel: Int) {
+    All("All", 2),
+    WarningsPlus("Warnings+", 5),
+    Errors("Errors", 6),
+}
+
+@Composable
+private fun AppLogSection() {
+    LaunchedEffect(Unit) { AppLog.start() }
+    val entries by AppLog.entries.collectAsStateWithLifecycle()
+    var filter by remember { mutableStateOf(LogFilter.All) }
+    var atBottom by remember { mutableStateOf(true) }
+    val listState = rememberLazyListState()
+    val visible = entries.filter { it.level >= filter.minLevel }
+
+    LaunchedEffect(listState, visible.size) {
+        if (atBottom && visible.isNotEmpty()) {
+            listState.scrollToItem(visible.lastIndex)
+        }
+    }
+    LaunchedEffect(listState, visible.size) {
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        }.collect { lastVisible ->
+            atBottom = lastVisible >= visible.lastIndex - 1
+        }
+    }
+
+    SectionHeader("App Log")
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            LogFilter.entries.forEach { option ->
+                FilterChip(
+                    selected = filter == option,
+                    onClick = { filter = option },
+                    label = { Text(option.label) },
+                )
+            }
+        }
+        TextButton(onClick = { AppLog.clear() }, enabled = entries.isNotEmpty()) {
+            Text("Clear")
+        }
+    }
+    Text(
+        text = "${visible.size} entries · process ${Process.myPid()}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(320.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            items(visible, key = { it.hashCode() }) { entry ->
+                LogEntryRow(entry)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LogEntryRow(entry: AppLog.Entry) {
+    val color = when (entry.priority) {
+        'E', 'F' -> MaterialTheme.colorScheme.error
+        'W' -> MaterialTheme.colorScheme.tertiary
+        'I' -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val time = SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(entry.timeMs)
+    Text(
+        text = "$time ${entry.priority} ${entry.tag}: ${entry.message}",
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontFamily = FontFamily.Monospace,
+            color = color,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable

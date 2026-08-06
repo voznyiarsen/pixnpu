@@ -233,6 +233,42 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   models without audio capabilities will error through the normal generate()
   path.
 
+### Video (frames + audio)
+- Video attach in the composer is offered only when the loaded model supports
+  vision AND audio (`InferenceMetrics.supportsVideo`, i.e. `Modality.Video`).
+- `VideoFile.kt`: `readVideoClip` (name/duration via MediaMetadataRetriever,
+  cheap) + `extractVideoFrames` (up to 8 evenly-spaced frames via
+  `getScaledFrameAtTime(OPTION_CLOSEST_SYNC)`, ≤640px, JPEG to cache dir,
+  1 GB source cap). At send time `MainViewModel.send()` feeds the model
+  `Content.ImageFile(framePaths)` first, then `Content.AudioBytes(pcm16ToWav(
+  decodeAudioFileToPcm(uri)))` — the same WAV-wrapped audio path as voice
+  notes; frame-extraction failure aborts to an error toast, audio failure is
+  non-fatal (text+frames still sent).
+- A video replaces any other pending attachment (`setPendingVideo` clears
+  image/audio/textFile) so a single turn stays under the engine's 10
+  content-item cap.
+- Video clips are shown as chips in `InputBar` and `MessageBubble`
+  (`Fmt.duration` for mm:ss / h:mm:ss).
+
+### App Log (Settings)
+- `util/AppLog.kt`: ring buffer (2000 entries) of logcat for the app's own
+  process, streamed via `logcat -v threadtime --pid=<pid>` on an IO dispatcher.
+  Captures native LiteRT-LM/TFLite/miniaudio output, not just android.util.Log.
+  Started lazily (`AppLog.start()`, idempotent) from the Settings screen.
+- Settings shows a 320 dp scrolling `LazyColumn` with severity filter chips
+  (All / Warnings+ / Errors — levels use numeric priority, alphabetical Char
+  comparison is wrong) and a Clear button. Auto-scroll only while pinned at the
+  bottom (`snapshotFlow` on the last visible index — same pattern as the chat
+  list).
+- `AppLog.parseLine` is internal and unit-tested (`AppLogTest`).
+
+### Input bar key handling
+- `BasicTextField` in `InputBar` uses `Modifier.onPreviewKeyEvent`: on KeyUp of
+  backspace **or** shift+backspace (`Key.Backspace` / `Key.Delete` — compose-ui
+  1.9 renamed the old `Key.Del`/`Key.ForwardDel`) with empty input, the pending
+  attachment (image → audio → file → video) is removed instead of nothing
+  happening.
+
 ## Conventions
 
 - Use `MutableStateFlow`/`StateFlow` for all async state — never `LiveData`.
