@@ -108,6 +108,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val apiServerUrl by vm.apiServerUrl.collectAsStateWithLifecycle()
     val apiToken by vm.apiToken.collectAsStateWithLifecycle()
     val keepScreenOn by vm.keepScreenOn.collectAsStateWithLifecycle()
+    val markdownEnabled by vm.markdownEnabled.collectAsStateWithLifecycle()
     val samplingPresets by vm.samplingPresets.collectAsStateWithLifecycle()
 
     var tabRowHeight by remember { mutableStateOf(56.dp) }
@@ -255,9 +256,10 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                              onClearImage = { vm.setPendingImage(null) },
                             onSetAudio = { vm.setPendingAudio(it) },
                             onSetTextFile = { vm.setPendingTextFile(it) },
-                            supportsVision = metrics.supportsVision,
-                            supportsAudio = metrics.supportsAudio,
-                        )
+                             supportsVision = metrics.supportsVision,
+                             supportsAudio = metrics.supportsAudio,
+                             markdownEnabled = markdownEnabled,
+                         )
                              Screen.MODELS -> ModelSelectorScreen(
                                  models = models,
                                  downloadState = downloadState,
@@ -284,6 +286,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  apiServerUrl = apiServerUrl,
                                  apiToken = apiToken,
                                  keepScreenOn = keepScreenOn,
+                                 markdownEnabled = markdownEnabled,
                                  presets = samplingPresets,
                                  onChangeParams = vm::updateParams,
                                  onChangeSystemPrompt = vm::updateSystemPrompt,
@@ -294,6 +297,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  onApiPortChange = vm::setApiPort,
                                  onApiTokenChange = vm::setApiToken,
                                  onKeepScreenOnChange = vm::setKeepScreenOn,
+                                 onMarkdownEnabledChange = vm::setMarkdownEnabled,
                                  onCreatePreset = { name -> vm.createSamplingPreset(name, params) },
                                  onDeletePreset = vm::deleteSamplingPreset,
                                  onApplyPreset = vm::applySamplingPreset,

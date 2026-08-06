@@ -113,6 +113,7 @@ fun InferenceScreen(
     pendingTextFile: TextFileClip?,
     supportsVision: Boolean = true,
     supportsAudio: Boolean = true,
+    markdownEnabled: Boolean = true,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
@@ -187,9 +188,23 @@ fun InferenceScreen(
         onDispose { recorder.release() }
     }
 
-    LaunchedEffect(messages.size, messages.lastOrNull()?.text?.length) {
+    // Follow the conversation: when a new message is added, jump to it so the
+    // latest turn is visible. While streaming (the last message grows in place),
+    // only keep pinning to the bottom if the user is already at the bottom —
+    // never fight an explicit scroll.
+    LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
-            listState.scrollToItem(messages.lastIndex)
+            listState.scrollToItem(messages.lastIndex, scrollOffset = Int.MAX_VALUE)
+        }
+    }
+    LaunchedEffect(messages.lastOrNull()?.text?.length) {
+        if (messages.isNotEmpty()) {
+            val layout = listState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()
+            val atBottom = lastVisible == null || lastVisible.index >= layout.totalItemsCount - 1
+            if (atBottom) {
+                listState.scrollToItem(messages.lastIndex, scrollOffset = Int.MAX_VALUE)
+            }
         }
     }
 
@@ -208,7 +223,7 @@ fun InferenceScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(messages, key = { it.id }) { message ->
-                        MessageBubble(message)
+                        MessageBubble(message, markdownEnabled)
                     }
                 }
             }
@@ -369,7 +384,7 @@ private fun ModelLoadedPrompt() {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: ChatMessage, markdownEnabled: Boolean = true) {
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
@@ -447,6 +462,7 @@ private fun MessageBubble(message: ChatMessage) {
                 StreamingText(
                     text = message.text,
                     caretVisible = message.streaming,
+                    markdownEnabled = markdownEnabled,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 8.dp),

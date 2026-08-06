@@ -261,7 +261,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
               val contents = Contents.of(content)
               Log.d("LiteRTLMEngine", "Starting generation on backend: ${state.backend?.label}")
 
-              val newConversation = withContext(Dispatchers.Default) {
+              val (newConversation, fullPrompt) = withContext(Dispatchers.Default) {
                   buildConversationWithCleanedHistory(contents, state.engine, state.params, state.systemPrompt, state.backend, state.history)
               }
 
@@ -278,7 +278,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                   // coroutines channel. Requires coroutines 1.11+ (see AGENTS.md —
                   // the SendChannel.close$default ABI this bytecode needs is absent
                   // in 1.9.0, which killed the process).
-                  newConversation.sendMessageAsync(contents).collect { message ->
+                  newConversation.sendMessageAsync(fullPrompt).collect { message ->
                       val tokenText = message.contents.contents
                           .filterIsInstance<Content.Text>()
                           .joinToString("") { it.text }
@@ -299,7 +299,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                   // Fallback: synchronous generation with word-sized chunk emission
                   // (the pre-1.11 workaround).
                   Log.w("LiteRTLMEngine", "Native streaming failed, falling back to sync generation", e)
-                  val reply = newConversation.sendMessage(contents).toString()
+                  val reply = newConversation.sendMessage(fullPrompt).toString()
                   fullReply.append(reply)
                   if (reply.isNotEmpty()) {
                       val chunks = reply.split(" ").filter { it.isNotEmpty() }
@@ -368,6 +368,8 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
        * from assistant responses to prevent template mismatch errors.
        *
        * @param history Previous conversation turns (userContent, assistantResponse)
+       * @return The new conversation plus the full prompt contents (cleaned history +
+       *         new user content) that must be sent for generation.
        */
       private suspend fun buildConversationWithCleanedHistory(
           newUserContent: Contents,
@@ -376,7 +378,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
           systemPrompt: String,
           backend: ActiveBackend?,
           history: List<Pair<List<Content>, String>>
-      ): Conversation {
+      ): Pair<Conversation, Contents> {
           Log.d("LiteRTLMEngine", "Building cleaned history with ${history.size} previous turns")
           
           // Build history with reasoning stripped from assistant messages
@@ -420,7 +422,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
           val fullPromptContents = Contents.of(historyContents)
           Log.d("LiteRTLMEngine", "Sending message with ${historyContents.size} history items")
           
-          return newConversation
+          return Pair(newConversation, fullPromptContents)
       }
 
     override fun cancel() {

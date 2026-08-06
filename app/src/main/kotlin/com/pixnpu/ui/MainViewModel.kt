@@ -71,6 +71,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _keepScreenOn = MutableStateFlow(prefs.getBoolean("keep_screen_on", false))
     val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
 
+    private val _markdownEnabled = MutableStateFlow(prefs.getBoolean("markdown_enabled", true))
+    val markdownEnabled: StateFlow<Boolean> = _markdownEnabled.asStateFlow()
+
     private val _samplingPresets = MutableStateFlow(loadSamplingPresets())
     val samplingPresets: StateFlow<List<SamplingPreset>> = _samplingPresets.asStateFlow()
     
@@ -275,6 +278,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putBoolean("keep_screen_on", enabled).apply()
     }
 
+    fun setMarkdownEnabled(enabled: Boolean) {
+        _markdownEnabled.value = enabled
+        prefs.edit().putBoolean("markdown_enabled", enabled).apply()
+    }
+
     /** Max length of a custom preset name. */
     private val maxPresetNameLength = 40
 
@@ -343,6 +351,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _systemPrompt.value = ""
         _template.value = PromptTemplate.Auto
         _keepScreenOn.value = false
+        _markdownEnabled.value = true
         _samplingPresets.value = emptyList()
         prefs.edit().clear().apply()
         _engineMessage.value = "Settings reset to defaults"

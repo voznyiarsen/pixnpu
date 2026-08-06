@@ -163,6 +163,23 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 
 ## Improvements Implemented
 
+### Chat UI
+- **Markdown rendering on by default** (`Markdown.kt`): headings, bold/italic,
+  inline code, links, bullet/ordered lists, blockquotes, horizontal rules —
+  rendered on top of the existing fenced-code highlighter (`CodeHighlight.kt`).
+  **"Render Markdown" toggle in Settings** (prefs `markdown_enabled`, default
+  true) falls back to plain text when off. `StreamingText` gained a
+  `markdownEnabled` param; parser (`parseBlocks`/`parseInline`) is internal and
+  unit-tested (`MarkdownParserTest`).
+- **Chat list no longer yanks the viewport during generation**: auto-scroll is
+  split into (a) new-message jumps (`messages.size`) and (b) bottom-pinning on
+  stream growth only when the user is already at the bottom (`scrollToItem(
+  lastIndex, scrollOffset = Int.MAX_VALUE)` anchors the growing message's bottom
+  edge instead of its top).
+- **Multi-turn history**: the engine streams `sendMessageAsync(fullPrompt)` where
+  `fullPrompt` = cleaned history + new user content (returned by
+  `buildConversationWithCleanedHistory`); the sync fallback uses the same prompt.
+
 ### Stability
 - **Thread-safe engine state**: All state access in `LiteRTLMEngine` is now protected by mutex
 - **Circuit breakers**: Added for download and import operations to prevent repeated failures

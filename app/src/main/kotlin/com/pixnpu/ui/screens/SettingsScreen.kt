@@ -68,6 +68,7 @@ fun SettingsScreen(
     apiServerUrl: String,
     apiToken: String,
     keepScreenOn: Boolean,
+    markdownEnabled: Boolean,
     presets: List<SamplingPreset>,
     onChangeParams: (GenerationParams) -> Unit,
     onChangeSystemPrompt: (String) -> Unit,
@@ -78,6 +79,7 @@ fun SettingsScreen(
     onApiPortChange: (Int) -> Unit,
     onApiTokenChange: (String) -> Unit,
     onKeepScreenOnChange: (Boolean) -> Unit,
+    onMarkdownEnabledChange: (Boolean) -> Unit,
     onCreatePreset: (String) -> Unit,
     onDeletePreset: (String) -> Unit,
     onApplyPreset: (String) -> Unit,
@@ -280,6 +282,12 @@ fun SettingsScreen(
             )
 
             SectionHeader("Other")
+            ToggleRow(
+                title = "Render Markdown",
+                subtitle = "Format model replies with bold, headings, lists, quotes and code blocks",
+                checked = markdownEnabled,
+                onCheckedChange = onMarkdownEnabledChange,
+            )
             ToggleRow(
                 title = "Keep Screen On",
                 subtitle = "Prevents the display from sleeping while the app is open",

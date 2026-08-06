@@ -132,6 +132,7 @@ fun StreamingText(
     modifier: Modifier = Modifier,
     maxCodeHeight: Dp = 340.dp,
     caretVisible: Boolean = false,
+    markdownEnabled: Boolean = true,
     bodyStyle: TextStyle = MaterialTheme.typography.bodyLarge,
 ) {
     val thinkingSegments = remember(text) { parseThinking(text) }
@@ -140,12 +141,21 @@ fun StreamingText(
         thinkingSegments.forEachIndexed { index, segment ->
             val isLast = index == thinkingSegments.lastIndex
             when (segment) {
-                is ThinkingSegment.Text -> SegmentedBody(
-                    segments = remember(segment.content) { scanSegments(segment.content) },
-                    caretVisible = caretVisible && isLast,
-                    bodyStyle = bodyStyle,
-                    maxCodeHeight = maxCodeHeight,
-                )
+                is ThinkingSegment.Text -> {
+                    if (markdownEnabled) {
+                        SegmentedBody(
+                            segments = remember(segment.content) { scanSegments(segment.content) },
+                            caretVisible = caretVisible && isLast,
+                            bodyStyle = bodyStyle,
+                            maxCodeHeight = maxCodeHeight,
+                        )
+                    } else {
+                        HighlightedBody(
+                            text = if (caretVisible && isLast) "${segment.content}▌" else segment.content,
+                            style = bodyStyle,
+                        )
+                    }
+                }
                 is ThinkingSegment.Thinking -> ThinkingBlock(
                     content = segment.content,
                     closed = segment.closed,
@@ -167,9 +177,9 @@ private fun SegmentedBody(
         segments.forEachIndexed { index, seg ->
             val isLast = index == segments.lastIndex
             when (seg) {
-                is Segment.Text -> HighlightedBody(
+                is Segment.Text -> MarkdownBody(
                     text = if (caretVisible && isLast) "${seg.content}▌" else seg.content,
-                    style = bodyStyle,
+                    bodyStyle = bodyStyle,
                 )
                 is Segment.Code -> CodeBlock(
                     lang = seg.lang,
