@@ -9,7 +9,6 @@ import androidx.lifecycle.viewModelScope
 import com.google.ai.edge.litertlm.Content
 import com.pixnpu.di.AppContainer
 import com.pixnpu.engine.GenerationParams
-import com.pixnpu.engine.LiteRTLMEngine
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.PromptTemplate
 import com.pixnpu.engine.PromptTemplates
@@ -17,7 +16,6 @@ import com.pixnpu.engine.SamplingPreset
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelLoadStatus
-import com.pixnpu.model.ModelManager
 import com.pixnpu.model.ModelManagerInterface
 import com.pixnpu.engine.Modality
 import com.pixnpu.server.OpenAiApiServer
@@ -79,11 +77,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _samplingPresets = MutableStateFlow(loadSamplingPresets())
     val samplingPresets: StateFlow<List<SamplingPreset>> = _samplingPresets.asStateFlow()
-    
-    // Keep references to concrete implementations for cases where interface isn't sufficient
-    private val rawManager: ModelManager = container.rawModelManager
-    private val rawEngine: LiteRTLMEngine = container.rawEngine
-
     val models: StateFlow<List<LocalModel>> = manager.models
     val downloadState: StateFlow<DownloadState> = manager.downloadState
     val metrics = engine.metrics
@@ -367,8 +360,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Keeps the API server's view of the loaded model in sync with the UI state.
      */
     private fun syncServerModelId() {
-        container.openAiApiServer.currentModelId.set(
-            _selectedModel.value?.name?.removeSuffix(".litertlm"),
+        val model = _selectedModel.value
+        container.openAiApiServer.setCurrentModel(
+            id = model?.name?.removeSuffix(".litertlm"),
+            path = model?.absolutePath,
         )
     }
 
@@ -498,7 +493,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    manager.verify(model, isCancelled = { rawManager.isCancelled() })
+                    manager.verify(model, isCancelled = { manager.isCancelled() })
                 }
             } catch (e: Exception) {
                 _engineMessage.value = e.message ?: "Verification failed"

@@ -24,17 +24,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pixnpu.ui.AudioClip
 import java.io.ByteArrayOutputStream
 import java.util.Locale
@@ -68,15 +66,17 @@ class AudioRecorder(private val scope: CoroutineScope) {
     private val _elapsedMs = MutableStateFlow(0L)
     val elapsedMs: StateFlow<Long> = _elapsedMs
 
+    /** Observable recording state (drives the panel's icon/text). */
+    private val _isRecording = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording
+
     private var audioRecord: AudioRecord? = null
     private var stream = ByteArrayOutputStream()
     private var job: Job? = null
 
-    val isRecording: Boolean get() = job?.isActive == true
-
     @SuppressLint("MissingPermission") // Permission checked by the caller before start().
     fun start(onMaxDurationReached: () -> Unit = {}) {
-        if (isRecording) return
+        if (_isRecording.value) return
         val minBufferSize =
             AudioRecord.getMinBufferSize(AUDIO_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBufferSize <= 0) {
@@ -94,6 +94,7 @@ class AudioRecorder(private val scope: CoroutineScope) {
         audioRecord = recorder
         stream = ByteArrayOutputStream()
         _elapsedMs.value = 0L
+        _isRecording.value = true
         job = scope.launch(Dispatchers.IO) {
             try {
                 recorder.startRecording()
@@ -126,6 +127,7 @@ class AudioRecorder(private val scope: CoroutineScope) {
     fun stop(): ByteArray {
         job?.cancel()
         job = null
+        _isRecording.value = false
         val recorder = audioRecord
         if (recorder?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
             runCatching { recorder.stop() }
@@ -141,6 +143,7 @@ class AudioRecorder(private val scope: CoroutineScope) {
     fun release() {
         job?.cancel()
         job = null
+        _isRecording.value = false
         audioRecord?.let {
             if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 runCatching { it.stop() }
@@ -163,7 +166,8 @@ fun AudioRecorderPanel(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val elapsedMs by recorder.elapsedMs.collectAsState()
+    val elapsedMs by recorder.elapsedMs.collectAsStateWithLifecycle()
+    val isRecording by recorder.isRecording.collectAsStateWithLifecycle()
     val elapsedSeconds = String.format(Locale.ROOT, "%.1f", elapsedMs / 1000f)
     val scope = rememberCoroutineScope()
 
@@ -181,7 +185,7 @@ fun AudioRecorderPanel(
             colors = IconButtonDefaults.iconButtonColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
             ),
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(48.dp),
         ) {
             Icon(
                 imageVector = Icons.Rounded.Close,
@@ -199,7 +203,7 @@ fun AudioRecorderPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (recorder.isRecording) {
+                text = if (isRecording) {
                     "Recording $elapsedSeconds s"
                 } else {
                     "Tap the mic button to start"
@@ -211,7 +215,7 @@ fun AudioRecorderPanel(
             IconButton(
                 onClick = {
                     scope.launch {
-                        if (recorder.isRecording) {
+                        if (isRecording) {
                             val bytes = recorder.stop()
                             if (bytes.isNotEmpty()) {
                                 onSend(AudioClip(bytes = bytes, durationMs = pcmBytesToDurationMs(bytes)))
@@ -226,8 +230,8 @@ fun AudioRecorderPanel(
                 ),
             ) {
                 Icon(
-                    imageVector = if (recorder.isRecording) Icons.Rounded.ArrowUpward else Icons.Rounded.Mic,
-                    contentDescription = if (recorder.isRecording) "Send audio clip" else "Start recording",
+                    imageVector = if (isRecording) Icons.Rounded.ArrowUpward else Icons.Rounded.Mic,
+                    contentDescription = if (isRecording) "Send audio clip" else "Start recording",
                     tint = Color.White,
                 )
             }

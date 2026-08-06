@@ -37,7 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.unit.dp
 import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
@@ -189,10 +189,11 @@ private fun ModelCard(
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = when (loadStatus) {
-            ModelLoadStatus.Success -> Color.Green.copy(alpha = 0.4f)
-            ModelLoadStatus.Failed -> Color.Red.copy(alpha = 0.4f)
-            ModelLoadStatus.Loading -> Color.Yellow.copy(alpha = 0.4f)
-            ModelLoadStatus.Unloading -> Color.Magenta.copy(alpha = 0.4f)
+            // Theme tokens only — hardcoded RGB breaks dark mode and dynamic color.
+            ModelLoadStatus.Success -> MaterialTheme.colorScheme.tertiaryContainer
+            ModelLoadStatus.Failed -> MaterialTheme.colorScheme.errorContainer
+            ModelLoadStatus.Loading -> MaterialTheme.colorScheme.secondaryContainer
+            ModelLoadStatus.Unloading -> MaterialTheme.colorScheme.surfaceContainerHigh
             else -> if (selected) {
                 MaterialTheme.colorScheme.secondaryContainer
             } else {

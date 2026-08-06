@@ -436,7 +436,11 @@ private fun MessageBubble(message: ChatMessage, markdownEnabled: Boolean = true)
                     Column(
                         modifier = Modifier
                             .combinedClickable(
-                                onClick = {},
+                                onClickLabel = "Copy message",
+                                onClick = {
+                                    clipboardManager.setText(AnnotatedString(message.text))
+                                },
+                                onLongClickLabel = "Copy message",
                                 onLongClick = {
                                     clipboardManager.setText(AnnotatedString(message.text))
                                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
@@ -525,7 +529,11 @@ private fun MessageBubble(message: ChatMessage, markdownEnabled: Boolean = true)
                 modifier = Modifier
                     .fillMaxWidth()
                     .combinedClickable(
-                        onClick = {},
+                        onClickLabel = "Copy message",
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(message.text))
+                        },
+                        onLongClickLabel = "Copy message",
                         onLongClick = {
                             clipboardManager.setText(AnnotatedString(message.text))
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)

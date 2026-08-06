@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.pixnpu.engine.EngineStatus
 import com.pixnpu.engine.GenerationParams
@@ -174,5 +175,43 @@ private fun StatusChip(
                 style = MaterialTheme.typography.bodySmall.copy(color = resolvedColor),
             )
         }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 400)
+@Composable
+private fun RuntimeStatusBarPreview() {
+    MaterialTheme {
+        RuntimeStatusBar(
+            metrics = InferenceMetrics(
+                status = EngineStatus.Ready,
+                backend = "NPU",
+                ttftMs = 320,
+                warmupMs = 1800,
+                tokensPerSecond = 42.5,
+                contextTokens = 1536,
+                maxContextTokens = 8192,
+            ),
+            params = GenerationParams(),
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 400)
+@Composable
+private fun RuntimeStatusBarGeneratingPreview() {
+    MaterialTheme {
+        RuntimeStatusBar(
+            metrics = InferenceMetrics(
+                status = EngineStatus.Generating,
+                backend = "NPU",
+                ttftMs = 210,
+                warmupMs = 1800,
+                tokensPerSecond = 38.2,
+                contextTokens = 512,
+                maxContextTokens = 8192,
+            ),
+            params = GenerationParams(),
+        )
     }
 }

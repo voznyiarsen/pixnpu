@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
@@ -66,6 +67,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.keepScreenOn
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -339,7 +341,7 @@ private fun NavTabButton(
         modifier = Modifier
             .width(TabWidth)
             .clip(RoundedCornerShape(36.dp))
-            .clickable(onClick = onClick)
+            .selectable(selected = selected, onClick = onClick, role = Role.Tab)
             .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -351,7 +353,8 @@ private fun NavTabButton(
         ) { isSelected ->
             Icon(
                 imageVector = if (isSelected) screen.selectedIcon else screen.unselectedIcon,
-                contentDescription = screen.label,
+                // The visible label below is the accessible name — don't read it twice.
+                contentDescription = null,
                 tint = tint,
                 modifier = Modifier.graphicsLayer {
                     scaleX = iconScale

@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -640,7 +641,11 @@ private fun AppLogSection() {
     var filter by remember { mutableStateOf(LogFilter.All) }
     var atBottom by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
-    val visible = entries.filter { it.level >= filter.minLevel }
+    // Filtering 2000 entries on every log line is wasteful; derivedStateOf
+    // only recomputes when the entries or the filter actually change.
+    val visible by remember {
+        derivedStateOf { entries.filter { it.level >= filter.minLevel } }
+    }
 
     LaunchedEffect(listState, visible.size) {
         if (atBottom && visible.isNotEmpty()) {

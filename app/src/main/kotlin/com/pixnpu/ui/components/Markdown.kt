@@ -28,6 +28,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -127,7 +128,9 @@ fun MarkdownBody(
 @Composable
 private fun TableBlock(block: MdBlock.Table, bodyStyle: TextStyle) {
     val borderColor = MaterialTheme.colorScheme.outlineVariant
-    val columnWidths = tableColumnWeights(block)
+    // Weights are O(cells) recursive text scans — recompute only per table, not
+    // per recomposition of the streaming message.
+    val columnWidths = remember(block) { tableColumnWeights(block) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -467,4 +470,29 @@ internal fun parseInline(text: String): List<MdSpan> {
     }
     flushPlain()
     return spans
+}
+
+@Preview(showBackground = true, widthDp = 360)
+@Composable
+private fun MarkdownBodyPreview() {
+    MaterialTheme {
+        MarkdownBody(
+            text = """
+                # Heading
+
+                Some **bold**, *italic*, `inline code` and a [link](https://example.com).
+
+                - bullet one
+                - bullet two
+
+                | Model | Tokens/s | Backend |
+                |:------|---------:|:-------:|
+                | gemma3-270m | 42.5 | NPU |
+                | gemma3-1b | 21.3 | GPU |
+
+                > Quote line
+            """.trimIndent(),
+            bodyStyle = MaterialTheme.typography.bodyLarge,
+        )
+    }
 }

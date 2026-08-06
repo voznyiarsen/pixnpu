@@ -26,20 +26,6 @@ class AppContainer(private val context: Context) {
     val engine: LiteRTLMEngineInterface by lazy {
         LiteRTLMEngine(context.applicationContext)
     }
-    
-    /**
-     * Provides the actual ModelManager for cases where the interface isn't sufficient
-     */
-    val rawModelManager: ModelManager by lazy {
-        ModelManager(context.applicationContext)
-    }
-    
-    /**
-     * Provides the actual LiteRTLMEngine for cases where the interface isn't sufficient
-     */
-    val rawEngine: LiteRTLMEngine by lazy {
-        LiteRTLMEngine(context.applicationContext)
-    }
 
     /**
      * Provides the OpenAI-compatible API server. Shares the same [engine] instance

@@ -64,6 +64,24 @@ class ChatCompletionsProcessor(private val context: Context) {
         private const val rolePrefixSystem = "System: "
         private const val rolePrefixUser = "User: "
         private const val rolePrefixAssistant = "Assistant: "
+
+        /**
+         * Cap for decoded base64 payloads (audio bytes, data: URIs) — a bound
+         * against memory exhaustion from hostile or buggy clients.
+         */
+        private const val MAX_PAYLOAD_BYTES = 64L * 1024 * 1024
+
+        /** Ceiling for the base64 *string* length that can decode to the cap. */
+        private val MAX_BASE64_LEN = ((MAX_PAYLOAD_BYTES * 4) / 3 + 4).toInt()
+    }
+
+    /** Rejects base64 that would decode past [MAX_PAYLOAD_BYTES]. */
+    private fun checkPayloadSize(base64: String, what: String) {
+        if (base64.length > MAX_BASE64_LEN) {
+            throw ChatCompletionError.BadRequest(
+                "$what exceeds the ${MAX_PAYLOAD_BYTES / (1024 * 1024)} MiB limit",
+            )
+        }
     }
 
     /**
@@ -159,6 +177,7 @@ class ChatCompletionsProcessor(private val context: Context) {
             ?: throw ChatCompletionError.BadRequest("input_audio part is missing 'input_audio'")
         val data = audio["data"]?.jsonPrimitive?.contentOrNull
             ?: throw ChatCompletionError.BadRequest("input_audio part is missing 'data'")
+        checkPayloadSize(data, "input_audio 'data'")
         val bytes = try {
             Base64.getDecoder().decode(data)
         } catch (e: IllegalArgumentException) {
@@ -187,6 +206,7 @@ class ChatCompletionsProcessor(private val context: Context) {
         if (!metadata.endsWith(";base64", ignoreCase = true)) {
             throw ChatCompletionError.BadRequest("data: URI must be base64-encoded")
         }
+        checkPayloadSize(payload, "data: URI payload")
         val bytes = try {
             Base64.getDecoder().decode(payload)
         } catch (e: IllegalArgumentException) {

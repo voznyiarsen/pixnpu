@@ -113,5 +113,13 @@ data class ModelListResponse(
 data class ServiceInfo(
     val service: String = "pixnpu",
     val api: String = "v1",
-    val endpoints: List<String> = listOf("/v1/models", "/v1/chat/completions"),
+    val endpoints: List<String> = listOf(
+        "/v1/models",
+        "/v1/chat/completions",
+        "/completion",
+        "/props",
+        "/slots",
+        "/tokenize",
+        "/detokenize",
+    ),
 )

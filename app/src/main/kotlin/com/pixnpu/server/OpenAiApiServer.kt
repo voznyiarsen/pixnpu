@@ -29,6 +29,7 @@ import java.io.Writer
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
 
@@ -41,6 +42,8 @@ private const val TAG = "OpenAiApiServer"
  *  - GET  /health, /          basic service info
  *  - GET  /v1/models          currently loaded model
  *  - POST /v1/chat/completions chat completions, JSON or SSE streaming
+ *  - POST /completion, GET /props, GET /slots, POST /tokenize, POST /detokenize
+ *    llama.cpp server-compatible API (see LlamaApi.kt)
  *
  * Binds to loopback (127.0.0.1) by default. The bind address is configurable
  * from Settings (e.g. 0.0.0.0 to expose it on the LAN — there is no auth, so
@@ -68,19 +71,32 @@ class OpenAiApiServer(
     }
 
     /**
-     * Id of the currently loaded model (file name without .litertlm), set by the
-     * ViewModel on load/unload. Used for /v1/models and model validation.
+     * Id and on-disk path of the currently loaded model (set by the ViewModel on
+     * load/unload). Used for /v1/models, /props and model validation. Exposed
+     * read-only; mutated only via [setCurrentModel].
      */
-    val currentModelId = AtomicReference<String?>(null)
+    private val modelIdRef = AtomicReference<String?>(null)
+    private val modelPathRef = AtomicReference<String?>(null)
+
+    val currentModelId: String? get() = modelIdRef.get()
+
+    fun setCurrentModel(id: String?, path: String? = null) {
+        modelIdRef.set(id)
+        modelPathRef.set(path)
+    }
 
     @Volatile
     private var server: CIOApplicationEngine? = null
+
+    /** Serializes start()/stop() so a race cannot double-start or leak a server. */
+    private val lifecycleLock = Any()
 
     val isRunning: Boolean get() = server != null
 
     /**
      * Starts the server bound to the given host/port. Blocks until startup
-     * completes; call from Dispatchers.IO.
+     * completes; call from Dispatchers.IO. Idempotent: a second call while
+     * running is a no-op.
      *
      * @param tokenProvider Supplies the required API token (null/blank = no auth).
      *        Invoked per request, so changing the token while running applies to
@@ -91,31 +107,37 @@ class OpenAiApiServer(
         port: Int = PORT,
         tokenProvider: () -> String? = { null },
     ) {
-        if (server != null) {
-            Log.w(TAG, "start() called while already running")
-            return
+        synchronized(lifecycleLock) {
+            if (server != null) {
+                Log.w(TAG, "start() called while already running")
+                return
+            }
+            val instance = embeddedServer(CIO, host = host, port = port) {
+                openAiApiModule(
+                    engine,
+                    context,
+                    modelIdProvider = { currentModelId },
+                    modelPathProvider = { modelPathRef.get() },
+                    tokenProvider = tokenProvider,
+                )
+            }
+            server = instance
+            instance.start(wait = false)
+            Log.i(TAG, "API server listening on http://$host:$port")
         }
-        val instance = embeddedServer(CIO, host = host, port = port) {
-            openAiApiModule(
-                engine,
-                context,
-                modelIdProvider = { currentModelId.get() },
-                tokenProvider = tokenProvider,
-            )
-        }
-        server = instance
-        instance.start(wait = false)
-        Log.i(TAG, "API server listening on http://$host:$port")
     }
 
     /**
      * Stops the server, waiting up to 2s for in-flight requests. Blocks the
-     * calling thread briefly; call from Dispatchers.IO.
+     * calling thread briefly; call from Dispatchers.IO. Idempotent.
      */
     fun stop() {
-        server?.stop(gracePeriodMillis = 1000, timeoutMillis = 2000)
-        server = null
-        Log.i(TAG, "API server stopped")
+        synchronized(lifecycleLock) {
+            val instance = server ?: return
+            instance.stop(gracePeriodMillis = 1000, timeoutMillis = 2000)
+            server = null
+            Log.i(TAG, "API server stopped")
+        }
     }
 }
 
@@ -126,6 +148,7 @@ fun Application.openAiApiModule(
     engine: LiteRTLMEngineInterface,
     context: Context,
     modelIdProvider: () -> String?,
+    modelPathProvider: () -> String? = { null },
     tokenProvider: () -> String? = { null },
 ) {
     val json = Json {
@@ -194,6 +217,13 @@ fun Application.openAiApiModule(
                     HttpStatusCode.fromValue(e.status),
                     ApiError(ErrorBody(e.message ?: "error", e.errorType, e.param, e.code)),
                 )
+            } catch (e: IllegalArgumentException) {
+                // Engine input validation (e.g. oversized prompts) is a client error.
+                Log.w(TAG, "Bad request rejected by engine: ${e.message}")
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiError(ErrorBody(e.message ?: "Invalid request", param = null)),
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "Chat completion failed", e)
                 call.respond(
@@ -202,6 +232,17 @@ fun Application.openAiApiModule(
                 )
             }
         }
+
+        // llama.cpp server-compatible endpoints share the same engine and the
+        // same single-generation busy gate as the OpenAI API above.
+        llamaApiRoutes(
+            engine = engine,
+            json = json,
+            modelIdProvider = modelIdProvider,
+            modelPathProvider = modelPathProvider,
+            tokenProvider = tokenProvider,
+            inFlight = inFlight,
+        )
     }
 }
 
@@ -306,10 +347,15 @@ private suspend fun streamCompletion(
                     flush()
                 }
             }
+        } catch (e: CancellationException) {
+            // Client disconnected or the call was aborted — normal for streams,
+            // not an error. The engine flow is cancelled and its cancellation-safe
+            // finally resets metrics + the busy gate.
+            Log.d(TAG, "Stream ended (client disconnected or aborted)")
+            throw e
         } catch (e: Exception) {
-            // Client went away; the engine finishes in the background and the
-            // busy gate clears itself when the flow completes.
-            Log.w(TAG, "Stream aborted (client disconnected?): ${e.message}")
+            // I/O failure writing to a dead connection.
+            Log.d(TAG, "Stream write failed: ${e.message}")
             return@respondTextWriter
         }
         writeSse(chunk(ChunkDelta(), "stop"))

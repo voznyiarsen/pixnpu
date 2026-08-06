@@ -699,7 +699,7 @@ class ModelManager(private val context: Context) : ModelManagerInterface {
                 DownloadState.Failed(name, "Not a .litertlm file")
             return
         }
-        val totalBytes = resolver.openAssetFileDescriptor(uri, "r")?.length
+        val totalBytes = resolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
             ?: querySize(resolver, uri)
         
         // Validate file size before starting import

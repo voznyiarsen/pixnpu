@@ -46,6 +46,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.pixnpu.engine.ThinkingSegment
@@ -297,16 +298,24 @@ private fun ThinkingPulse() {
 
 @Composable
 private fun HighlightedBody(text: String, style: TextStyle, modifier: Modifier = Modifier) {
+    val base = MaterialTheme.colorScheme.onSurface
+    val commentColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val keywordColor = MaterialTheme.colorScheme.primary
+    val stringColor = MaterialTheme.colorScheme.tertiary
+    val numberColor = MaterialTheme.colorScheme.secondary
     Text(
-        text = highlightCode(
-            lang = "plain",
-            code = text,
-            base = MaterialTheme.colorScheme.onSurface,
-            commentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            keywordColor = MaterialTheme.colorScheme.primary,
-            stringColor = MaterialTheme.colorScheme.tertiary,
-            numberColor = MaterialTheme.colorScheme.secondary,
-        ),
+        // Regex tokenization is O(n) — skip it unless the text actually changed.
+        text = remember(text) {
+            highlightCode(
+                lang = "plain",
+                code = text,
+                base = base,
+                commentColor = commentColor,
+                keywordColor = keywordColor,
+                stringColor = stringColor,
+                numberColor = numberColor,
+            )
+        },
         modifier = modifier,
         style = style,
     )
@@ -327,16 +336,23 @@ private fun CodeBlock(lang: String, content: String, maxHeight: Dp) {
                 style = MaterialTheme.typography.labelMedium,
             )
         }
+        val base = MaterialTheme.colorScheme.onSurface
+        val commentColor = MaterialTheme.colorScheme.onSurfaceVariant
+        val keywordColor = MaterialTheme.colorScheme.primary
+        val stringColor = MaterialTheme.colorScheme.tertiary
+        val numberColor = MaterialTheme.colorScheme.secondary
         Text(
-            text = highlightCode(
-                lang = lang,
-                code = content,
-                base = MaterialTheme.colorScheme.onSurface,
-                commentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                keywordColor = MaterialTheme.colorScheme.primary,
-                stringColor = MaterialTheme.colorScheme.tertiary,
-                numberColor = MaterialTheme.colorScheme.secondary,
-            ),
+            text = remember(content) {
+                highlightCode(
+                    lang = lang,
+                    code = content,
+                    base = base,
+                    commentColor = commentColor,
+                    keywordColor = keywordColor,
+                    stringColor = stringColor,
+                    numberColor = numberColor,
+                )
+            },
             style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
         )
     }
@@ -371,3 +387,22 @@ private val DEFAULT_KEYWORDS = setOf("if", "else", "for", "while", "return", "im
 
 private fun keywordSetFor(lang: String): Set<String> =
     KEYWORDS[lang.lowercase().trim()] ?: DEFAULT_KEYWORDS
+
+@Preview(showBackground = true, widthDp = 360)
+@Composable
+private fun StreamingTextPreview() {
+    MaterialTheme {
+        StreamingText(
+            text = """
+                Quick reply with a fenced code block:
+
+                ```
+                fun hello(name: String) = "Hi, ${'$'}name!"
+                ```
+
+                And a **bold** trailing sentence.
+            """.trimIndent(),
+            markdownEnabled = true,
+        )
+    }
+}

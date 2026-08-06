@@ -138,10 +138,31 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   Unknown model id → **404** `code:"model_not_found"` (matches OpenAI, not 400).
 - Toggle: **API Server switch in the Settings tab** (needs a loaded model). Server dies
   with the process — no foreground service. Follow-ups: https image URLs.
-- Tests: `ChatCompletionsProcessorTest` (mapping/validation) + `OpenAiApiServerTest`
-  (route tests via ktor `testApplication`). **Test JVM must be Java 21+**: LiteRT-LM 0.15.0
-  ships Java 21 bytecode (class file 65) — `tasks.withType<Test> { javaLauncher }` in
-  app/build.gradle.kts pins it.
+- **llama.cpp server-compatible API** (`server/LlamaApi.kt` + `LlamaModels.kt`, mounted
+  in the same Ktor module, same optional Bearer auth, same shared busy gate):
+  - `POST /completion` — raw prompt (string only; token-id arrays → 400, no tokenizer),
+    `stream` (SSE frames `data: {...}` with `"stop":false`/`"stop":true` — **no
+    `[DONE]`**, faithful to llama.cpp), `n_predict` (`-1` = engine default; `< -1` → 400),
+    `temperature`/`top_k`/`top_p` → `paramsOverride` (`top_k: 0` = engine default),
+    `echo` prepends the prompt, `slot_id` must be -1 or 0. `min_p`/`repeat_penalty`/
+    `stop`/`seed`/`n_keep`/`cache_prompt`/`samplers` accepted and ignored (engine has no
+    equivalents). Response echoes `generation_settings` + `timings` (chars/4 estimates);
+    `truncated` = predicted_n >= n_predict. Busy → **503 `{"error":"Slot busy"}`**;
+    no model → 503.
+  - `GET /props` — `default_generation_settings` (engine defaults, `n_ctx` from metrics),
+    `total_slots: 1`, `model_path`, `chat_template: null` (no GGUF template).
+  - `GET /slots` — one slot, `state` "idle"/"processing" from `metrics.status`.
+  - `POST /tokenize` and `POST /detokenize` — **always 501**: LiteRT-LM 0.15.0 exposes
+    only `Conversation.getTokenCount()` (count, no ids, no detokenizer); 501 beats
+    fabricated token ids.
+  - Model id/path synced from the UI via `OpenAiApiServer.setCurrentModel(id, path)`;
+    `currentModelId` is read-only public. `start()`/`stop()` are synchronized (atomic
+    lifecycle). Chat route maps engine `IllegalArgumentException` → 400; stream
+    client-disconnect is a `CancellationException` (info log, rethrow — not a warning).
+- Tests: `ChatCompletionsProcessorTest` (mapping/validation) + `OpenAiApiServerTest` +
+  `LlamaApiTest` (llama.cpp routes via ktor `testApplication`). **Test JVM must be Java
+  21+**: LiteRT-LM 0.15.0 ships Java 21 bytecode (class file 65) —
+  `tasks.withType<Test> { javaLauncher }` in app/build.gradle.kts pins it.
 
 ## Known limitations
 
@@ -271,6 +292,37 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   1.9 renamed the old `Key.Del`/`Key.ForwardDel`) with empty input, the pending
   attachment (image → audio → file → video) is removed instead of nothing
   happening.
+
+### Reliability / hardening (audit remediation)
+- **Cancellation-safe engine metrics**: in `LiteRTLMEngine.generateInternal` the
+  `finally` uses non-suspending `mutex.tryLock()` — after cancellation every suspend
+  call (incl. `mutex.withLock`) throws immediately, which previously left `_metrics`
+  stuck at `Generating` and the API server's 429 busy-gate locked forever. A
+  `CancellationException` rethrow sits before the sync-fallback catch, so "stop"
+  never triggers the blocking `sendMessage` fallback; the fallback and
+  `getTokenCount()` run on `Dispatchers.IO` (never Main).
+- **DI cleanup**: `AppContainer` no longer exposes separate `rawModelManager`/
+  `rawEngine` instances (they were never wired to UI cancel — model verification
+  checked `isCancelled()` on a *different* manager instance, so cancel never
+  stopped a verify). Verification now uses the same `manager` the cancel button
+  targets.
+- **PFD leak fixed**: `ModelManager.import()` closes its `openAssetFileDescriptor`
+  via `use {}`.
+- **Server hardening**: `OpenAiApiServer.currentModelId` is now a read-only getter
+  mutated via `setCurrentModel(id, path)`; `start()`/`stop()` are synchronized
+  (no double-start race); base64 payloads (`input_audio`, `data:` URIs) capped at
+  64 MiB *before* decoding; engine `IllegalArgumentException` → 400.
+- **A11y**: bottom nav buttons are `Role.Tab` + `selectable` (icon `contentDescription
+  = null` — the visible label is the name); message bubbles copy on tap or long-press
+  (`onClickLabel`/`onLongClickLabel`) instead of an empty `onClick = {}` (foundation
+  1.9.3 has **no** nullable-`onClick` combinedClickable overload — verified via javap);
+  ModelCard status colors are theme tokens (no hardcoded RGB); recorder buttons are
+  48 dp; `AudioRecorder.isRecording` is now a `StateFlow` collected with
+  `collectAsStateWithLifecycle()`.
+- **Perf**: `AppLog` list filter via `derivedStateOf` (not a per-recomposition
+  filter of 2000 entries); `highlightCode` and table-column weights are
+  `remember`ed; `@Preview`s added for `RuntimeStatusBar`, `StreamingText`,
+  `MarkdownBody`.
 
 ## Conventions
 

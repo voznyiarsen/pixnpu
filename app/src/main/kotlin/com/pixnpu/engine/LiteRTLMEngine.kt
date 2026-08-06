@@ -10,8 +10,10 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +22,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 sealed class ActiveBackend(val label: String) {
     data object NPU : ActiveBackend("NPU")
@@ -247,7 +250,9 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
 
           Log.d("LiteRTLMEngine", "Starting generation (history turns: ${state.history.size}, backend: ${state.backend?.label})")
 
-          // Update metrics atomically
+          // Update metrics atomically. getTokenCount() is a blocking native call,
+          // so it runs off the collector thread.
+          val ctxTokensAtStart = withContext(Dispatchers.IO) { safeTokenCount() }
           mutex.withLock {
               _metrics.value = _metrics.value.copy(
                   status = EngineStatus.Generating,
@@ -255,7 +260,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                   totalTokens = 0,
                   tokensPerSecond = 0.0,
                   currentTokensPerSecond = 0.0,
-                  contextTokens = safeTokenCount(),
+                  contextTokens = ctxTokensAtStart,
               )
           }
 
@@ -297,11 +302,19 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                       }
                       emit(tokenText)
                   }
+              } catch (e: CancellationException) {
+                  // Cancelled mid-stream: propagate without running the sync
+                  // fallback — regenerating the reply after the user hit stop
+                  // would block the caller and resurrect a cancelled turn.
+                  throw e
               } catch (e: Exception) {
                   // Fallback: synchronous generation with word-sized chunk emission
-                  // (the pre-1.11 workaround).
+                  // (the pre-1.11 workaround). Runs on IO: sendMessage is a
+                  // blocking native call that can take the full reply duration.
                   Log.w("LiteRTLMEngine", "Native streaming failed, falling back to sync generation", e)
-                  val reply = newConversation.sendMessage(fullPrompt).toString()
+                  val reply = withContext(Dispatchers.IO) {
+                      newConversation.sendMessage(fullPrompt).toString()
+                  }
                   fullReply.append(reply)
                   if (reply.isNotEmpty()) {
                       val chunks = reply.split(" ").filter { it.isNotEmpty() }
@@ -336,20 +349,36 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
               textLength = tokenEstimate(finalReply)
               Log.d("LiteRTLMEngine", "Streamed $streamedTokens tokens (${finalReply.length} chars), stored in history")
 
+          } catch (e: CancellationException) {
+              // Normal stop path (UI cancel / API abort): not an error, rethrow
+              // without the error log.
+              throw e
           } catch (e: Exception) {
               Log.e("LiteRTLMEngine", "Generation failed", e)
               throw e
           } finally {
               val done = System.nanoTime()
               val totalSecs = (done - startedAt) / 1_000_000_000.0
-              mutex.withLock {
-                  _metrics.value = _metrics.value.copy(
-                      status = EngineStatus.Ready,
-                      totalTokens = textLength,
-                      tokensPerSecond = if (totalSecs > 0) textLength / totalSecs else 0.0,
-                      currentTokensPerSecond = if (totalSecs > 0) textLength / totalSecs else 0.0,
-                      contextTokens = safeTokenCount(),
-                  )
+              // Cancellation-safe metrics reset. Once a coroutine is cancelled,
+              // every suspend call — including mutex.withLock — throws immediately,
+              // which used to leave _metrics stuck at Generating and the API
+              // server's busy gate locked forever. tryLock() is non-suspending,
+              // so the reset always runs.
+              if (mutex.tryLock()) {
+                  try {
+                      val ctxTokens =
+                          if (coroutineContext.isActive) safeTokenCount()
+                          else _metrics.value.contextTokens
+                      _metrics.value = _metrics.value.copy(
+                          status = EngineStatus.Ready,
+                          totalTokens = textLength,
+                          tokensPerSecond = if (totalSecs > 0) textLength / totalSecs else 0.0,
+                          currentTokensPerSecond = if (totalSecs > 0) textLength / totalSecs else 0.0,
+                          contextTokens = ctxTokens,
+                      )
+                  } finally {
+                      mutex.unlock()
+                  }
               }
           }
       }
