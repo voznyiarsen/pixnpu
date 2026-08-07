@@ -1,6 +1,7 @@
 package com.pixnpu.ui.screens
 
 import android.os.Process
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,6 +52,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -658,6 +660,8 @@ private fun AppLogSection() {
     var filter by remember { mutableStateOf(LogFilter.All) }
     var atBottom by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     // Filtering 2000 entries on every log line is wasteful; derivedStateOf
     // only recomputes when the entries or the filter actually change.
     val visible by remember {
@@ -701,6 +705,31 @@ private fun AppLogSection() {
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = {
+                if (visible.isNotEmpty()) {
+                    clipboard.setText(
+                        AnnotatedString(
+                            visible.joinToString("\n") {
+                                val t = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT)
+                                    .format(it.timeMs)
+                                "$t ${it.priority} ${it.tag}: ${it.message}"
+                            },
+                        ),
+                    )
+                    Toast.makeText(context, "Copied ${visible.size} log lines", Toast.LENGTH_SHORT).show()
+                }
+            },
+            enabled = visible.isNotEmpty(),
+        ) {
+            Text("Copy all")
+        }
+    }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -714,14 +743,16 @@ private fun AppLogSection() {
             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
         ) {
             items(visible, key = { it.id }) { entry ->
-                LogEntryRow(entry)
+                LogEntryRow(entry) {
+                    Toast.makeText(context, "Copied log line", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
 }
 
 @Composable
-private fun LogEntryRow(entry: AppLog.Entry) {
+private fun LogEntryRow(entry: AppLog.Entry, onCopied: () -> Unit) {
     val color = when (entry.priority) {
         'E', 'F' -> MaterialTheme.colorScheme.error
         'W' -> MaterialTheme.colorScheme.tertiary
@@ -740,7 +771,10 @@ private fun LogEntryRow(entry: AppLog.Entry) {
         modifier = Modifier
             .fillMaxWidth()
             // Tap copies the entry's full logcat line to the clipboard.
-            .clickable { clipboard.setText(AnnotatedString(line)) },
+            .clickable {
+                clipboard.setText(AnnotatedString(line))
+                onCopied()
+            },
     )
 }
 

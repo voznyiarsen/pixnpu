@@ -268,18 +268,35 @@ fun Route.llamaApiRoutes(
             )
         }
         val loadedId = modelIdProvider()
+        val metrics = engine.metrics.value
         call.respond(
             ModelListResponse(
                 data = modelsProvider().map { model ->
+                    val isLoaded = model.id == loadedId
                     ModelInfo(
                         id = model.id,
                         created = model.lastModified / 1000,
                         aliases = listOf(model.id),
+                        // llama.cpp status contract: "loaded" / "unloaded" (Pi's
+                        // /llama UI shows "X is not loaded" and hides the load
+                        // action for any other value).
                         status = ModelStatus(
-                            value = if (model.id == loadedId) "loaded" else "not loaded",
+                            value = if (isLoaded) "loaded" else "unloaded",
                         ),
-                        meta = if (model.id == loadedId) {
-                            ModelMeta(nCtx = engine.metrics.value.maxContextTokens.coerceAtLeast(1))
+                        meta = if (isLoaded) {
+                            ModelMeta(nCtx = metrics.maxContextTokens.coerceAtLeast(1))
+                        } else {
+                            null
+                        },
+                        architecture = if (isLoaded) {
+                            ModelArchitecture(
+                                inputModalities = buildList {
+                                    add("text")
+                                    if (metrics.supportsVision) add("image")
+                                    if (metrics.supportsVideo) add("video")
+                                    if (metrics.supportsAudio) add("audio")
+                                },
+                            )
                         } else {
                             null
                         },

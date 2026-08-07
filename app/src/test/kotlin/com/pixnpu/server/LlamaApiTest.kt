@@ -41,6 +41,7 @@ class LlamaApiTest {
         var loaded: Boolean = true,
         status: EngineStatus = EngineStatus.Ready,
         private val replyFlow: () -> Flow<String> = { flowOf("Hello", " world") },
+        private val supportsVision: Boolean = false,
     ) : LiteRTLMEngineInterface {
         var modelId: String? = null
         var modelPath: String? = null
@@ -48,7 +49,13 @@ class LlamaApiTest {
         var lastParamsOverride: GenerationParams? = null
         val generatedContents = mutableListOf<List<Content>>()
 
-        private val _metrics = MutableStateFlow(InferenceMetrics(status = status, maxContextTokens = 8192))
+        private val _metrics = MutableStateFlow(
+            InferenceMetrics(
+                status = status,
+                maxContextTokens = 8192,
+                supportsVision = supportsVision,
+            ),
+        )
         override val metrics: StateFlow<InferenceMetrics> = _metrics.asStateFlow()
 
         override val isLoaded: Boolean get() = loaded
@@ -356,17 +363,26 @@ class LlamaApiTest {
 
     @Test
     fun `models lists all models with status in router mode`() =
-        testServer(FakeEngine().apply { modelId = "gemma3-270m-it-q8" }, models = routerModels, routerMode = true) {
+        testServer(
+            FakeEngine(supportsVision = true).apply { modelId = "gemma3-270m-it-q8" },
+            models = routerModels,
+            routerMode = true,
+        ) {
             val response = get("/models")
             assertEquals(HttpStatusCode.OK, response.status)
             val body = json.decodeFromString<ModelListResponse>(response.bodyAsText())
             assertEquals(2, body.data.size)
+            // llama.cpp status contract: "loaded" / "unloaded" — Pi's /llama UI
+            // warns "X is not loaded" and hides the load action for any other value.
             assertEquals("loaded", body.data[0].status?.value)
-            assertEquals("not loaded", body.data[1].status?.value)
+            assertEquals("unloaded", body.data[1].status?.value)
             // meta.n_ctx is only reported for the loaded model (Pi uses it for
             // the context window; a wrong value would break context sizing).
             assertEquals(8192, body.data[0].meta?.nCtx)
             assertEquals(null, body.data[1].meta)
+            // architecture (modality capabilities) only for the loaded model.
+            assertEquals(listOf("text", "image"), body.data[0].architecture?.inputModalities)
+            assertEquals(null, body.data[1].architecture)
         }
 
     @Test

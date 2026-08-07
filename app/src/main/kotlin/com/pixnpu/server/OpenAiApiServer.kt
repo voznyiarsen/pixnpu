@@ -301,16 +301,31 @@ fun Application.openAiApiModule(
                     null
                 }
             val data = if (router) {
-                // Router mode: every installed model, with llama.cpp status.
+                // Router mode: every installed model, with llama.cpp status
+                // ("loaded" / "unloaded" — Pi's /llama UI treats any other
+                // value as "not loaded" and hides the load action).
                 modelsProvider().map { model ->
+                    val isLoaded = model.id == loadedId
                     ModelInfo(
                         id = model.id,
                         created = model.lastModified / 1000,
                         aliases = listOf(model.id),
                         status = ModelStatus(
-                            value = if (model.id == loadedId) "loaded" else "not loaded",
+                            value = if (isLoaded) "loaded" else "unloaded",
                         ),
                         meta = modelMeta(model.id),
+                        architecture = if (isLoaded) {
+                            ModelArchitecture(
+                                inputModalities = buildList {
+                                    add("text")
+                                    if (engine.metrics.value.supportsVision) add("image")
+                                    if (engine.metrics.value.supportsVideo) add("video")
+                                    if (engine.metrics.value.supportsAudio) add("audio")
+                                },
+                            )
+                        } else {
+                            null
+                        },
                     )
                 }
             } else {

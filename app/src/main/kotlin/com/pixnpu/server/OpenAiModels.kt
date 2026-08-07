@@ -130,11 +130,29 @@ data class ModelInfo(
      * back to their defaults.
      */
     val meta: ModelMeta? = null,
+    /**
+     * GGUF architecture of the loaded model (llama.cpp /models `architecture`);
+     * modality capabilities from the engine metrics. Present only on the
+     * resident model.
+     */
+    val architecture: ModelArchitecture? = null,
 )
 
 @Serializable
 data class ModelMeta(
     @SerialName("n_ctx") val nCtx: Int,
+)
+
+/**
+ * llama.cpp router /models `architecture` (GGUF arch metadata). Clients (Pi,
+ * its extensions) read `input_modalities` to decide whether images/video/audio
+ * can be sent to a model. Only the loaded model reports capabilities — the
+ * engine exposes them via InferenceMetrics; others omit the field.
+ */
+@Serializable
+data class ModelArchitecture(
+    @SerialName("input_modalities") val inputModalities: List<String> = listOf("text"),
+    @SerialName("output_modalities") val outputModalities: List<String> = listOf("text"),
 )
 
 /** llama.cpp router /v1/models + /models status object. */

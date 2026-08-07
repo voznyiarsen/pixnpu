@@ -186,17 +186,23 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
     `_isLoadingModel`), **400 `{"error":{"code":400,"message":"model is not loaded"}}`**
     for any installed-but-not-loaded model, 200 + props only when resident.
   - `GET /slots` — one slot, `state` "idle"/"processing" from `metrics.status`.
-  - **Router mode** (Settings toggle, pref `api_router_enabled`, read per request):
-    the server can start with no model loaded and `POST /v1/chat/completions` with
-    any installed model id auto-loads it on demand (via `MainViewModel.loadModelForApi`,
-    which reuses the UI load path so guards/status/chat-clear stay consistent); the
-    busy gate is held across load + generation. `GET /v1/models` and `GET /models`
-    list every installed model with `status: {"value": "loaded"|"not loaded"}`, `owned_by:
-    "llamacpp"` and **`meta.n_ctx` only on the loaded model** (Pi reads it for the
-    context window; absent = client fallback). `POST /models/load` / `POST /models/unload`
-    manage the loaded model (`{"success": true}`; unknown → 404; wrong state → 400).
-    Requests naming a model that isn't installed → 404; load failure → 503
-    `model_load_failed`; all router endpoints share the Bearer auth.
+- **Router mode** (Settings toggle, pref `api_router_enabled`, read per request):
+  the server can start with no model loaded and `POST /v1/chat/completions` with
+  any installed model id auto-loads it on demand (via `MainViewModel.loadModelForApi`,
+  which reuses the UI load path so guards/status/chat-clear stay consistent); the
+  busy gate is held across load + generation. `GET /v1/models` and `GET /models`
+  list every installed model with `status: {"value": "loaded"|"unloaded"}`
+  (**llama.cpp contract — NOT "not loaded"**: Pi's `/llama` UI shows
+  `Warning: X is not loaded` and hides the "load model" action for any other
+  value; the pi-llama-cpp extension's statusMapper likewise expects
+  "unloaded"), `owned_by: "llamacpp"` and **`meta.n_ctx` only on the loaded
+  model** (Pi reads it for the context window; absent = client fallback).
+  `architecture.input_modalities` (text/image/video/audio from engine metrics)
+  is reported **only on the loaded model** — clients (Pi, extensions) use it to
+  decide whether images can be sent. `POST /models/load` / `POST /models/unload`
+  manage the loaded model (`{"success": true}`; unknown → 404; wrong state → 400).
+  Requests naming a model that isn't installed → 404; load failure → 503
+  `model_load_failed`; all router endpoints share the Bearer auth.
   - `POST /tokenize` and `POST /detokenize` — **always 501**: LiteRT-LM 0.15.0 exposes
     only `Conversation.getTokenCount()` (count, no ids, no detokenizer); 501 beats
     fabricated token ids.
@@ -343,7 +349,9 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 - `AppLog.parseLine` is internal and unit-tested (`AppLogTest`).
 - **App Log rows are tap-to-copy**: tapping a log line copies its full logcat
   line (timestamp, priority, tag, message) to the clipboard
-  (`LocalClipboardManager`).
+  (`LocalClipboardManager`) and shows a "Copied log line" toast; a **"Copy all"**
+  button next to Clear copies every visible (filtered) entry as one text block
+  (full date timestamps), also with a toast.
 
 ### Input bar key handling
 - `BasicTextField` in `InputBar` uses `Modifier.onPreviewKeyEvent`: on KeyUp of

@@ -39,13 +39,20 @@ class OpenAiApiServerTest {
         var loaded: Boolean = true,
         status: EngineStatus = EngineStatus.Ready,
         private val replyFlow: () -> Flow<String> = { flowOf("Hello", " world") },
+        private val supportsVision: Boolean = false,
     ) : LiteRTLMEngineInterface {
         var modelId: String? = null
         var lastTrackHistory: Boolean? = null
         var lastParamsOverride: GenerationParams? = null
         val generatedContents = mutableListOf<List<Content>>()
 
-        private val _metrics = MutableStateFlow(InferenceMetrics(status = status, maxContextTokens = 8192))
+        private val _metrics = MutableStateFlow(
+            InferenceMetrics(
+                status = status,
+                maxContextTokens = 8192,
+                supportsVision = supportsVision,
+            ),
+        )
         override val metrics: StateFlow<InferenceMetrics> = _metrics.asStateFlow()
 
         override val isLoaded: Boolean get() = loaded
@@ -179,15 +186,22 @@ class OpenAiApiServerTest {
 
     @Test
     fun `router models list reports all installed models with status`() =
-        testServer(FakeEngine().apply { modelId = "gemma3-270m-it-q8" }, models = routerModels, routerMode = true) {
+        testServer(
+            FakeEngine(supportsVision = true).apply { modelId = "gemma3-270m-it-q8" },
+            models = routerModels,
+            routerMode = true,
+        ) {
             val response = get("/v1/models")
             assertEquals(HttpStatusCode.OK, response.status)
             val body = json.decodeFromString<ModelListResponse>(response.bodyAsText())
             assertEquals(2, body.data.size)
             assertEquals("gemma3-270m-it-q8", body.data[0].id)
             assertEquals("loaded", body.data[0].status?.value)
-            assertEquals("not loaded", body.data[1].status?.value)
+            assertEquals("unloaded", body.data[1].status?.value)
             assertEquals("llamacpp", body.data[0].ownedBy)
+            // architecture.modalities only on the loaded model (vision here).
+            assertEquals(listOf("text", "image"), body.data[0].architecture?.inputModalities)
+            assertEquals(null, body.data[1].architecture)
         }
 
     @Test
