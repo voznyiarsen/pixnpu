@@ -93,6 +93,7 @@ class LlamaApiTest {
         routerLoader: suspend (String) -> Boolean = { true },
         routerUnloader: suspend (String) -> Boolean = { true },
         loadingModelId: String? = null,
+        loadFailureId: String? = null,
         block: suspend io.ktor.client.HttpClient.() -> Unit,
     ) {
         val context = mockk<Context>(relaxed = true)
@@ -109,6 +110,7 @@ class LlamaApiTest {
                     routerLoader = routerLoader,
                     routerUnloader = routerUnloader,
                     loadingModelIdProvider = { loadingModelId },
+                    loadFailureProvider = { loadFailureId },
                 )
             }
             val client = createClient { }
@@ -392,23 +394,75 @@ class LlamaApiTest {
     }
 
     @Test
-    fun `models load loads a model by id`() {
+    fun `models load responds 200 immediately and loads in the background`() {
+        // llama.cpp contract: POST answers immediately, Pi then polls
+        // GET /models. A synchronous load would deadlock that poll, which is
+        // exactly the "llama.cpp returned HTTP 503" failure seen in Pi.
+        val loadStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val loadFinished = kotlinx.coroutines.CompletableDeferred<Unit>()
         var loadedId: String? = null
         testServer(
             FakeEngine(),
             models = routerModels,
             routerMode = true,
-            routerLoader = { id -> loadedId = id; true },
+            routerLoader = { id ->
+                loadedId = id
+                loadStarted.complete(Unit)
+                loadFinished.await()
+                true
+            },
+        ) {
+            val response = post("/models/load") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2"}""")
+            }
+            // 200 returned while the load coroutine is still blocked.
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertTrue(response.bodyAsText().contains("success"))
+        }
+        // The loader ran (and was released only after the response went out).
+        kotlinx.coroutines.runBlocking {
+            loadStarted.await()
+            loadFinished.complete(Unit)
+        }
+        assertEquals("llama3-2", loadedId)
+    }
+
+    @Test
+    fun `models load 503 while another model is loading`() =
+        testServer(
+            FakeEngine(),
+            models = routerModels,
+            routerMode = true,
+            loadingModelId = "gemma3-270m-it-q8",
+        ) {
+            val response = post("/models/load") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2"}""")
+            }
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            val body = json.decodeFromString<LlamaError>(response.bodyAsText())
+            assertTrue(body.error.contains("Slot busy"))
+        }
+
+    @Test
+    fun `models reports failed load attempts so clients stop polling`() =
+        testServer(
+            FakeEngine(),
+            models = routerModels,
+            routerMode = true,
+            routerLoader = { false },
+            loadFailureId = "llama3-2",
         ) {
             val response = post("/models/load") {
                 contentType(ContentType.Application.Json)
                 setBody("""{"model":"llama3-2"}""")
             }
             assertEquals(HttpStatusCode.OK, response.status)
-            assertTrue(response.bodyAsText().contains("success"))
+            val body = json.decodeFromString<ModelListResponse>(get("/models").bodyAsText())
+            assertEquals(true, body.data.first { it.id == "llama3-2" }.status?.failed)
+            assertEquals(false, body.data.first { it.id == "gemma3-270m-it-q8" }.status?.failed)
         }
-        assertEquals("llama3-2", loadedId)
-    }
 
     @Test
     fun `models load rejects already loaded model`() =
@@ -430,16 +484,6 @@ class LlamaApiTest {
                 setBody("""{"model":"nope"}""")
             }
             assertEquals(HttpStatusCode.NotFound, response.status)
-        }
-
-    @Test
-    fun `models load 503 when the load fails`() =
-        testServer(FakeEngine(), models = routerModels, routerMode = true, routerLoader = { false }) {
-            val response = post("/models/load") {
-                contentType(ContentType.Application.Json)
-                setBody("""{"model":"llama3-2"}""")
-            }
-            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
         }
 
     @Test

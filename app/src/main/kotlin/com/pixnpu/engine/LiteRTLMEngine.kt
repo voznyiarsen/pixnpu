@@ -24,6 +24,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 sealed class ActiveBackend(val label: String) {
     data object NPU : ActiveBackend("NPU")
@@ -47,6 +48,15 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
     private var activeSupportsAudio: Boolean = false
     private var currentParams: GenerationParams? = null
     private var currentSystemPrompt: String = ""
+    private var currentModelPath: String? = null
+    private var currentModality: Modality = Modality.TextOnly
+
+    // Set once a generation fails with a backend (NPU dispatch) error: the
+    // engine is reloaded on GPU and every subsequent load skips NPU. This
+    // keeps the app usable when the NPU dispatch library is absent from the
+    // APK or the model's compiled dispatch is broken (functiongemma-G5), where
+    // NPU initialization succeeds but every inference fails at dispatch time.
+    private val degradedBackend = AtomicBoolean(false)
     
     // Manual conversation history tracking to handle reasoning
     // Each entry is (userContent, assistantResponseWithReasoning)
@@ -92,6 +102,11 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
              activeSupportsAudio = modality.supportsAudio
              currentParams = params
              currentSystemPrompt = ""
+             currentModelPath = modelPath
+             currentModality = modality
+             // An explicit (re)load resets the degradation, so a later NPU-fixed
+             // build or another model can try NPU again.
+             degradedBackend.set(false)
              conversation = createNewConversation(params, "")
              warmup(init.backend)
              _metrics.value = _metrics.value.copy(
@@ -225,6 +240,32 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
           trackHistory: Boolean = true,
           paramsOverride: GenerationParams? = null,
       ): Flow<String> = flow {
+          var attempt = 0
+          while (true) {
+              try {
+                  generateOnce(content, trackHistory, paramsOverride).collect { emit(it) }
+                  return@flow
+              } catch (e: CancellationException) {
+                  throw e
+              } catch (e: Exception) {
+                  // Backend (NPU dispatch) failures degrade once: the engine is
+                  // reloaded on GPU and the generation retried automatically.
+                  // Content/template errors must NOT retry — they would fail the
+                  // same way on every backend.
+                  if (attempt == 0 && isBackendFailure(e) && degradeToGpu()) {
+                      attempt++
+                      continue
+                  }
+                  throw e
+              }
+          }
+      }
+
+      private fun generateOnce(
+          content: List<Content>,
+          trackHistory: Boolean = true,
+          paramsOverride: GenerationParams? = null,
+      ): Flow<String> = flow {
           // Capture all state under mutex to prevent race conditions
           val state = mutex.withLock {
               val engineRef = engine
@@ -332,10 +373,31 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                   // Fallback: synchronous generation with word-sized chunk emission
                   // (the pre-1.11 workaround). Runs on IO: sendMessage is a
                   // blocking native call that can take the full reply duration.
+                  //
+                  // CRITICAL: the async attempt already pushed the user message
+                  // into newConversation's native history before failing, so
+                  // reusing it here pushes the message a second time — the gemma3
+                  // template then rejects the conversation with "Conversation
+                  // roles must alternate user/assistant/..." (user at odd index).
+                  // The fallback therefore builds a FRESH conversation.
                   Log.w("LiteRTLMEngine", "Native streaming failed, falling back to sync generation", e)
+                  val fresh = withContext(Dispatchers.Default) {
+                      buildConversationWithCleanedHistory(
+                          Contents.of(content),
+                          state.engine,
+                          state.params,
+                          state.systemPrompt,
+                          state.backend,
+                          state.history,
+                      )
+                  }
+                  mutex.withLock {
+                      conversation?.close()
+                      conversation = fresh.first
+                  }
                   val replyMessage = withContext(Dispatchers.IO) {
-                      newConversation.sendMessage(
-                          fullPrompt,
+                      fresh.first.sendMessage(
+                          fresh.second,
                           thinkingConfig = ThinkingConfig(
                               enableThinking = state.params.thinkingEnabled,
                               thinkingTokenBudget = state.params.thinkingTokenBudget,
@@ -516,11 +578,13 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
     }
 
      private suspend fun initializeBackend(modelPath: String, params: GenerationParams, modality: Modality): InitResult {
-         val backendCandidates = listOf(
-             ActiveBackend.NPU,
-             ActiveBackend.GPU,
-             ActiveBackend.CPU(),
-         )
+         val backendCandidates = buildList {
+             // After a dispatch failure NPU is skipped entirely: its init succeeds
+             // but every inference fails, so retrying NPU wastes a full load cycle.
+             if (!degradedBackend.get()) add(ActiveBackend.NPU)
+             add(ActiveBackend.GPU)
+             add(ActiveBackend.CPU())
+         }
          var lastError: Throwable? = null
          for (candidate in backendCandidates) {
              _metrics.value = _metrics.value.copy(
@@ -664,6 +728,58 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
             Log.w("LiteRTLMEngine", "Failed to get token count", e)
             0
         }
+    }
+
+    /**
+     * Reloads the engine on the next available backend (GPU) after a dispatch
+     * failure, so the generation can be retried once. Only succeeds when the
+     * current backend is NPU (degrading a GPU/CPU run would be pointless).
+     */
+    private suspend fun degradeToGpu(): Boolean = mutex.withLock {
+        if (degradedBackend.get()) return@withLock false
+        val path = currentModelPath ?: return@withLock false
+        val params = currentParams ?: return@withLock false
+        degradedBackend.set(true)
+        return@withLock try {
+            releaseConversation()
+            unloadEngine()
+            val init = initializeBackend(path, params, currentModality)
+            activeBackend = init.backend
+            activeSupportsVision = currentModality.supportsVision
+            activeSupportsAudio = currentModality.supportsAudio
+            Log.w("LiteRTLMEngine", "Generation failed on NPU — degraded to backend ${init.backend.label}")
+            true
+        } catch (e: Exception) {
+            Log.e("LiteRTLMEngine", "Failed to degrade backend", e)
+            false
+        }
+    }
+
+    /**
+     * True when the failure is backend-related (NPU dispatch, delegate, kernel)
+     * rather than content/template-related. Template errors ("Failed to apply
+     * template", "roles must alternate") are content problems and must not
+     * trigger a backend retry.
+     */
+    private fun isBackendFailure(e: Throwable): Boolean {
+        var t: Throwable? = e
+        while (t != null) {
+            val msg = t.message?.lowercase() ?: ""
+            if (msg.contains("failed to apply template") ||
+                msg.contains("roles must alternate") ||
+                msg.contains("invalid operation")
+            ) {
+                return false
+            }
+            if (msg.contains("dispatch") || msg.contains("backend") ||
+                msg.contains("delegate") || msg.contains("npu") ||
+                msg.contains("kernel") || msg.contains("litert")
+            ) {
+                return true
+            }
+            t = t.cause
+        }
+        return false
     }
     
     /**

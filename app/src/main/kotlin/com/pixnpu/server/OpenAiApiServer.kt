@@ -109,34 +109,36 @@ class OpenAiApiServer(
      *        Invoked per request, so changing the token while running applies to
      *        new requests.
      */
-    fun start(
-        host: String = HOST,
-        port: Int = PORT,
-        tokenProvider: () -> String? = { null },
-        routerModeProvider: () -> Boolean = { false },
-        routerLoader: suspend (String) -> Boolean = { false },
-        routerUnloader: suspend (String) -> Boolean = { false },
-        loadingModelIdProvider: () -> String? = { null },
-    ) {
-        synchronized(lifecycleLock) {
-            if (server != null) {
-                Log.w(TAG, "start() called while already running")
-                return
-            }
-            val instance = embeddedServer(CIO, host = host, port = port) {
-                openAiApiModule(
-                    engine,
-                    context,
-                    modelIdProvider = { currentModelId },
-                    modelPathProvider = { modelPathRef.get() },
-                    tokenProvider = tokenProvider,
-                    modelsProvider = { modelManager.models.value },
-                    routerModeProvider = routerModeProvider,
-                    routerLoader = routerLoader,
-                    routerUnloader = routerUnloader,
-                    loadingModelIdProvider = loadingModelIdProvider,
-                )
-            }
+     fun start(
+         host: String = HOST,
+         port: Int = PORT,
+         tokenProvider: () -> String? = { null },
+         routerModeProvider: () -> Boolean = { false },
+         routerLoader: suspend (String) -> Boolean = { false },
+         routerUnloader: suspend (String) -> Boolean = { false },
+         loadingModelIdProvider: () -> String? = { null },
+         loadFailureProvider: () -> String? = { null },
+     ) {
+         synchronized(lifecycleLock) {
+             if (server != null) {
+                 Log.w(TAG, "start() called while already running")
+                 return
+             }
+             val instance = embeddedServer(CIO, host = host, port = port) {
+                 openAiApiModule(
+                     engine,
+                     context,
+                     modelIdProvider = { currentModelId },
+                     modelPathProvider = { modelPathRef.get() },
+                     tokenProvider = tokenProvider,
+                     modelsProvider = { modelManager.models.value },
+                     routerModeProvider = routerModeProvider,
+                     routerLoader = routerLoader,
+                     routerUnloader = routerUnloader,
+                     loadingModelIdProvider = loadingModelIdProvider,
+                     loadFailureProvider = loadFailureProvider,
+                 )
+             }
             server = instance
             instance.start(wait = false)
             Log.i(TAG, "API server listening on http://$host:$port")
@@ -167,6 +169,9 @@ class OpenAiApiServer(
  * @param routerUnloader unloads a model by id (llama.cpp POST /models/unload).
  * @param loadingModelIdProvider id of the model currently being loaded (null when
  *        nothing is loading). /props?model= reports 503 for it, like llama.cpp.
+ * @param loadFailureProvider id of the model whose last load attempt failed
+ *        (null when none). /models reports `failed: true` for it so clients
+ *        like Pi stop polling instead of hanging on a broken load.
  */
 fun Application.openAiApiModule(
     engine: LiteRTLMEngineInterface,
@@ -179,6 +184,7 @@ fun Application.openAiApiModule(
     routerLoader: suspend (String) -> Boolean = { false },
     routerUnloader: suspend (String) -> Boolean = { false },
     loadingModelIdProvider: () -> String? = { null },
+    loadFailureProvider: () -> String? = { null },
 ) {
     val json = Json {
         ignoreUnknownKeys = true
@@ -293,6 +299,7 @@ fun Application.openAiApiModule(
             }
             val router = routerModeProvider()
             val loadedId = modelIdProvider()
+            val failedId = loadFailureProvider()
             val now = System.currentTimeMillis() / 1000
             fun modelMeta(id: String): ModelMeta? =
                 if (id == loadedId) {
@@ -303,7 +310,8 @@ fun Application.openAiApiModule(
             val data = if (router) {
                 // Router mode: every installed model, with llama.cpp status
                 // ("loaded" / "unloaded" — Pi's /llama UI treats any other
-                // value as "not loaded" and hides the load action).
+                // value as "not loaded" and hides the load action; "failed"
+                // stops Pi's loadAndWait polling on a broken load).
                 modelsProvider().map { model ->
                     val isLoaded = model.id == loadedId
                     ModelInfo(
@@ -312,6 +320,7 @@ fun Application.openAiApiModule(
                         aliases = listOf(model.id),
                         status = ModelStatus(
                             value = if (isLoaded) "loaded" else "unloaded",
+                            failed = model.id == failedId,
                         ),
                         meta = modelMeta(model.id),
                         architecture = if (isLoaded) {
@@ -358,6 +367,7 @@ fun Application.openAiApiModule(
             routerLoader = routerLoader,
             routerUnloader = routerUnloader,
             loadingModelIdProvider = loadingModelIdProvider,
+            loadFailureProvider = loadFailureProvider,
         )
     }
 }

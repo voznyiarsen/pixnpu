@@ -159,6 +159,13 @@ data class ModelArchitecture(
 @Serializable
 data class ModelStatus(
     val value: String,
+    /**
+     * True when the last load attempt of this model failed (llama.cpp
+     * `failed`): Pi's loadAndWait stops polling and reports the failure.
+     * `exit_code` is omitted — there is no crashed process to report.
+     */
+    val failed: Boolean = false,
+    @SerialName("exit_code") val exitCode: Int? = null,
     val args: JsonObject = JsonObject(emptyMap()),
 )
 

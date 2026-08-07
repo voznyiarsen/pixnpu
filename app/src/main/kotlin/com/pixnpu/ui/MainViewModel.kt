@@ -108,6 +108,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoadingModel = MutableStateFlow<String?>(null)
     val isLoadingModel: StateFlow<String?> = _isLoadingModel.asStateFlow()
 
+    // Name of the model whose last load attempt failed (router mode). The API
+    // server reports it as `failed: true` in GET /models / GET /v1/models so
+    // llama.cpp clients (Pi) stop polling and show an error instead of
+    // hanging on a broken load.
+    private val _modelLoadFailure = MutableStateFlow<String?>(null)
+
     private val _modelLoadStatus = MutableStateFlow<Map<String, ModelLoadStatus>>(emptyMap())
     val modelLoadStatus: StateFlow<Map<String, ModelLoadStatus>> = _modelLoadStatus.asStateFlow()
 
@@ -435,6 +441,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 manager.models.value.firstOrNull { it.name == name }?.id
                             }
                         },
+                        loadFailureProvider = {
+                            _modelLoadFailure.value?.let { name ->
+                                manager.models.value.firstOrNull { it.name == name }?.id
+                            }
+                        },
                     )
                 }
                 _apiServerEnabled.value = true
@@ -490,6 +501,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             delay(50)
         }
         _engineMessage.value = null
+        _modelLoadFailure.value = null
         _isLoadingModel.value = model.name
         _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
             this[model.name] = ModelLoadStatus.Loading
@@ -518,6 +530,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _selectedModel.value = null
             syncServerModelId()
             _engineMessage.value = e.message ?: "Failed to load model"
+            _modelLoadFailure.value = model.name
             _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
                 this[model.name] = ModelLoadStatus.Failed
                 this.keys.filter { it != model.name && this[it] == ModelLoadStatus.Unloading }.forEach {

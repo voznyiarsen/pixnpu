@@ -191,18 +191,26 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   any installed model id auto-loads it on demand (via `MainViewModel.loadModelForApi`,
   which reuses the UI load path so guards/status/chat-clear stay consistent); the
   busy gate is held across load + generation. `GET /v1/models` and `GET /models`
-  list every installed model with `status: {"value": "loaded"|"unloaded"}`
-  (**llama.cpp contract — NOT "not loaded"**: Pi's `/llama` UI shows
-  `Warning: X is not loaded` and hides the "load model" action for any other
-  value; the pi-llama-cpp extension's statusMapper likewise expects
+  list every installed model with `status: {"value": "loaded"|"unloaded",
+  "failed": bool}` (**llama.cpp contract — NOT "not loaded"**: Pi's `/llama` UI
+  shows `Warning: X is not loaded` and hides the "load model" action for any
+  other value; the pi-llama-cpp extension's statusMapper likewise expects
   "unloaded"), `owned_by: "llamacpp"` and **`meta.n_ctx` only on the loaded
   model** (Pi reads it for the context window; absent = client fallback).
   `architecture.input_modalities` (text/image/video/audio from engine metrics)
   is reported **only on the loaded model** — clients (Pi, extensions) use it to
-  decide whether images can be sent. `POST /models/load` / `POST /models/unload`
-  manage the loaded model (`{"success": true}`; unknown → 404; wrong state → 400).
-  Requests naming a model that isn't installed → 404; load failure → 503
-  `model_load_failed`; all router endpoints share the Bearer auth.
+  decide whether images can be sent.
+  - **`POST /models/load` is ASYNC — responds `{"success": true}` immediately**
+    and loads in the background (llama.cpp contract): Pi's `loadAndWait` POSTs
+    then polls `GET /models` every 250 ms for status `"loaded"`, so a
+    synchronous load deadlocked that poll and its failures surfaced as
+    **503 `model_load_failed` → "llama.cpp returned HTTP 503" in the Pi UI**.
+    Loads do **not** hold the busy gate (a background load can't block chat);
+    a load while another model is loading → **503 `Slot busy`**. Load failures
+    are reported via **`status.failed: true`** on `GET /models` / `GET
+    /v1/models` (wired from MainViewModel's `_modelLoadFailure`) so Pi stops
+    polling and shows the error. `POST /models/unload` stays synchronous
+    (`{"success": true}`; unknown → 404; wrong state → 400; busy → 503).
   - `POST /tokenize` and `POST /detokenize` — **always 501**: LiteRT-LM 0.15.0 exposes
     only `Conversation.getTokenCount()` (count, no ids, no detokenizer); 501 beats
     fabricated token ids.
@@ -222,16 +230,23 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
    now native (real per-token deltas via `sendMessageAsync` on coroutines
    1.11.0); a synchronous word-chunk fallback remains in a catch block until
    verified on-device.
-2. **functiongemma-270m-G5.litertlm warmup fails on NPU** on Pixel 10 Pro (this
+2. **functiongemma-270m-G5.litertlm fails on NPU** on Pixel 10 Pro (this
    build) — `No dispatch library found in .../lib/arm64`. `gemma3-270m-it-q8`
    works on NPU. The load-time warmup in `LiteRTLMEngine` is **non-fatal**: it
    logs `Warmup failed on NPU (continuing without warmup)` and the model stays
-   loaded; the first real prompt then fails through the normal generate() path.
+   loaded; the first real prompt then fails through the normal generate() path,
+   which now **degrades automatically**: `isBackendFailure(e)` (dispatch/
+   backend/delegate/npu/litert keywords in the message chain; template errors
+   are explicitly excluded) → `degradeToGpu()` reloads the engine on GPU and
+   retries the generation once. `degradedBackend` (AtomicBoolean) then skips
+   NPU on every subsequent load until an explicit UI reload resets it.
    See logcat line references in the design summary.
 3. **Single in-flight download/import** — `ModelManager` gates on one
    `operationJob`; pause/cancel reset to Idle.
-4. **No segmented retry on NPU dispatch failure** — NPU registration is
-   all-or-nothing per model/backend.
+4. **NPU dispatch is a runtime concern, not just load-time** — we don't ship
+   Google Tensor `dispatch_api_so`, so NPU init succeeds but every inference
+   fails for some models; the degradation above absorbs that on the first
+   failed prompt instead of crashing or erroring.
 
 ## Improvements Implemented
 
@@ -379,6 +394,22 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   `CancellationException` rethrow sits before the sync-fallback catch, so "stop"
   never triggers the blocking `sendMessage` fallback; the fallback and
   `getTokenCount()` run on `Dispatchers.IO` (never Main).
+- **Fallback builds a fresh conversation**: when native streaming fails, the sync
+  `sendMessage` fallback rebuilds the conversation from scratch instead of
+  reusing the one the failed async attempt already polluted — reusing it pushed
+  the user message twice and gemma3's template died with "Conversation roles
+  must alternate user/assistant/..." (user at odd index).
+- **NPU dispatch degradation**: `generateInternal` is wrapped in a one-shot
+  retry — `isBackendFailure(e)` (dispatch/backend/delegate/npu/litert in the
+  message chain, template errors excluded) triggers `degradeToGpu()`: the
+  engine reloads on GPU and the generation retries once. `degradedBackend`
+  (AtomicBoolean) skips NPU on all subsequent loads until an explicit UI
+  reload. Absorbs "No dispatch library found" failures at the first prompt
+  instead of erroring every time (see Known limitations).
+- **Async router loads**: `POST /models/load` answers 200 and loads in the
+  background (llama.cpp contract — Pi polls `GET /models`), failures surface
+  as `status.failed: true` via MainViewModel `_modelLoadFailure` (cleared on
+  every new load attempt). Loads never hold the busy gate.
 - **DI cleanup**: `AppContainer` no longer exposes separate `rawModelManager`/
   `rawEngine` instances (they were never wired to UI cancel — model verification
   checked `isCancelled()` on a *different* manager instance, so cancel never

@@ -24,6 +24,7 @@ import java.io.Writer
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -46,13 +47,18 @@ private const val MAX_PROMPT_CHARS = 32000
  *                        accepts `?model=<id>` for a specific model
  *  - GET  /slots         slot state (exactly one shared slot)
  *  - GET  /models        router mode: every installed model + status
- *  - POST /models/load   router mode: load a model by id
+ *  - POST /models/load   router mode: load a model by id (async — responds 200
+ *                        immediately, status shows up on GET /models)
  *  - POST /models/unload router mode: unload a model by id
  *  - POST /tokenize      always 501: LiteRT-LM exposes no tokenizer
  *  - POST /detokenize    always 501: there is no detokenizer
  *
  * Shares the engine's busy gate with /v1/chat/completions: exactly one
- * generation (UI or API) may run at a time.
+ * generation (UI or API) may run at a time. Model loads are asynchronous and
+ * NOT part of the busy gate — Pi's loadAndWait sequence (POST /models/load,
+ * then poll GET /models every 250 ms until status is "loaded") would
+ * deadlock against a synchronous load, and the llama.cpp 503s it produces
+ * surface as "llama.cpp returned HTTP 503" in the Pi UI.
  */
 fun Route.llamaApiRoutes(
     engine: LiteRTLMEngineInterface,
@@ -66,6 +72,7 @@ fun Route.llamaApiRoutes(
     routerLoader: suspend (String) -> Boolean = { false },
     routerUnloader: suspend (String) -> Boolean = { false },
     loadingModelIdProvider: () -> String? = { null },
+    loadFailureProvider: () -> String? = { null },
 ) {
     fun unauthorized(call: ApplicationCall): Boolean {
         val expected = tokenProvider()
@@ -269,6 +276,7 @@ fun Route.llamaApiRoutes(
         }
         val loadedId = modelIdProvider()
         val metrics = engine.metrics.value
+        val failedId = loadFailureProvider()
         call.respond(
             ModelListResponse(
                 data = modelsProvider().map { model ->
@@ -279,9 +287,12 @@ fun Route.llamaApiRoutes(
                         aliases = listOf(model.id),
                         // llama.cpp status contract: "loaded" / "unloaded" (Pi's
                         // /llama UI shows "X is not loaded" and hides the load
-                        // action for any other value).
+                        // action for any other value). failed marks the last load
+                        // attempt that failed — Pi's loadAndWait stops polling and
+                        // reports the failure instead of hanging forever.
                         status = ModelStatus(
                             value = if (isLoaded) "loaded" else "unloaded",
+                            failed = model.id == failedId,
                         ),
                         meta = if (isLoaded) {
                             ModelMeta(nCtx = metrics.maxContextTokens.coerceAtLeast(1))
@@ -330,20 +341,24 @@ fun Route.llamaApiRoutes(
                 LlamaError("model '$id' is already loaded"),
             )
         }
-        if (engine.metrics.value.status == EngineStatus.Generating || !inFlight.compareAndSet(false, true)) {
+        if (loadingModelIdProvider() != null) {
+            // Another model is already being loaded by a previous request.
+            // llama.cpp has one slot, so a concurrent load is busy. 503 tells
+            // llama.cpp clients the slot is busy; Pi's loadAndWait treats it
+            // as retryable, which is correct here.
             return@post call.respond(HttpStatusCode.ServiceUnavailable, LlamaError("Slot busy"))
         }
-        try {
-            if (!routerLoader(id)) {
-                return@post call.respond(
-                    HttpStatusCode.ServiceUnavailable,
-                    LlamaError("model '$id' could not be loaded (busy or load failed)"),
-                )
-            }
-            call.respond(mapOf("success" to true))
-        } finally {
-            inFlight.set(false)
+        // llama.cpp loads asynchronously and answers 200 immediately — Pi's
+        // loadAndWait POSTs then polls GET /models until status "loaded" (or
+        // "failed"). Waiting for the load here would deadlock that poll, and a
+        // synchronous load failure surfaced as 503 is exactly the
+        // "llama.cpp returned HTTP 503" error seen in the Pi UI. Loads also
+        // don't hold the busy gate, so a background load can't block chat.
+        call.application.launch {
+            runCatching { routerLoader(id) }
+                .onFailure { Log.w(TAG, "Model load '$id' failed", it) }
         }
+        call.respond(mapOf("success" to true))
     }
 
     post("/models/unload") {
