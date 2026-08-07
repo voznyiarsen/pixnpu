@@ -106,6 +106,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val pendingVideo by vm.pendingVideo.collectAsStateWithLifecycle()
     val selectedModality by vm.selectedModality.collectAsStateWithLifecycle()
     val apiServerEnabled by vm.apiServerEnabled.collectAsStateWithLifecycle()
+    val apiRouterEnabled by vm.apiRouterEnabled.collectAsStateWithLifecycle()
     val apiHost by vm.apiHost.collectAsStateWithLifecycle()
     val apiPort by vm.apiPort.collectAsStateWithLifecycle()
     val apiServerUrl by vm.apiServerUrl.collectAsStateWithLifecycle()
@@ -287,6 +288,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  modality = selectedModality,
                                  isGenerating = isGenerating,
                                  apiServerEnabled = apiServerEnabled,
+                                 apiRouterEnabled = apiRouterEnabled,
                                  apiHost = apiHost,
                                  apiPort = apiPort,
                                  apiServerUrl = apiServerUrl,
@@ -299,6 +301,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  onChangeTemplate = vm::setTemplate,
                                  onModalityChange = vm::setSelectedModality,
                                  onToggleApiServer = vm::toggleApiServer,
+                                 onToggleApiRouter = vm::setApiRouterEnabled,
                                  onApiHostChange = vm::setApiHost,
                                  onApiPortChange = vm::setApiPort,
                                  onApiTokenChange = vm::setApiToken,

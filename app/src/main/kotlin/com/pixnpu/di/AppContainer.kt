@@ -28,11 +28,12 @@ class AppContainer(private val context: Context) {
     }
 
     /**
-     * Provides the OpenAI-compatible API server. Shares the same [engine] instance
-     * the UI uses, so API calls are gated against UI generation.
+     * Provides the OpenAI-compatible API server. Shares the same [engine] and
+     * [modelManager] the UI uses, so API calls are gated against UI generation
+     * and router mode can list + load any installed model.
      */
     val openAiApiServer: OpenAiApiServer by lazy {
-        OpenAiApiServer(context.applicationContext, engine)
+        OpenAiApiServer(context.applicationContext, engine, modelManager)
     }
 }
 

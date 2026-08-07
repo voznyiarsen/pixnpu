@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.ai.edge.litertlm.Content
+import com.pixnpu.PixNpuForegroundService
 import com.pixnpu.di.AppContainer
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.LiteRTLMEngineInterface
@@ -17,6 +18,7 @@ import com.pixnpu.model.DownloadState
 import com.pixnpu.model.LocalModel
 import com.pixnpu.model.ModelLoadStatus
 import com.pixnpu.model.ModelManagerInterface
+import com.pixnpu.model.id
 import com.pixnpu.engine.Modality
 import com.pixnpu.server.OpenAiApiServer
 import com.pixnpu.ui.components.AudioFileDecodeResult
@@ -24,6 +26,7 @@ import com.pixnpu.ui.components.decodeAudioFileToPcm
 import com.pixnpu.ui.components.extractVideoFrames
 import com.pixnpu.ui.components.pcm16ToWav
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -68,6 +71,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _apiToken = MutableStateFlow(prefs.getString("api_token", "") ?: "")
     val apiToken: StateFlow<String> = _apiToken.asStateFlow()
+
+    private val _apiRouterEnabled = MutableStateFlow(prefs.getBoolean("api_router_enabled", false))
+    val apiRouterEnabled: StateFlow<Boolean> = _apiRouterEnabled.asStateFlow()
 
     private val _keepScreenOn = MutableStateFlow(prefs.getBoolean("keep_screen_on", false))
     val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
@@ -130,6 +136,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var generationJob: Job? = null
     private var apiServerJob: Job? = null
     private val messageId = AtomicLong(0)
+
+    // Reference-counts the foreground service (generation + API server are the
+    // two clients). The service keeps the process alive and holds a partial
+    // wake lock, so generation continues when the app loses focus / screen off.
+    private val backgroundClients = AtomicInteger(0)
+
+    private fun addBackgroundClient() {
+        if (backgroundClients.incrementAndGet() == 1) {
+            PixNpuForegroundService.start(getApplication())
+        }
+    }
+
+    private fun releaseBackgroundClient() {
+        if (backgroundClients.decrementAndGet() <= 0) {
+            backgroundClients.set(0)
+            PixNpuForegroundService.stop(getApplication())
+        }
+    }
 
     private val _selectedModality = MutableStateFlow(Modality.TextOnly)
     val selectedModality: StateFlow<Modality> = _selectedModality.asStateFlow()
@@ -277,6 +301,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putBoolean("keep_screen_on", enabled).apply()
     }
 
+    fun setApiRouterEnabled(enabled: Boolean) {
+        if (enabled == _apiRouterEnabled.value) return
+        _apiRouterEnabled.value = enabled
+        prefs.edit().putBoolean("api_router_enabled", enabled).apply()
+        if (_apiServerEnabled.value) {
+            // The router flag is read per request, so a running server picks it
+            // up on the next request — no restart needed.
+            _engineMessage.value =
+                if (enabled) "Router mode on — requests can auto-load any installed model"
+                else "Router mode off"
+        }
+    }
+
     fun setMarkdownEnabled(enabled: Boolean) {
         _markdownEnabled.value = enabled
         prefs.edit().putBoolean("markdown_enabled", enabled).apply()
@@ -373,9 +410,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             apiServerJob = viewModelScope.launch {
                 withContext(Dispatchers.IO) { container.openAiApiServer.stop() }
                 _apiServerEnabled.value = false
+                releaseBackgroundClient()
             }
         } else {
-            if (!engine.isLoaded) {
+            // Router mode can serve requests without any model loaded — the
+            // requested model is loaded on demand. Single-model mode needs a
+            // loaded model.
+            if (!engine.isLoaded && !_apiRouterEnabled.value) {
                 _engineMessage.value = "Load a model before starting the API server"
                 return
             }
@@ -386,16 +427,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         _apiHost.value,
                         _apiPort.value,
                         tokenProvider = { _apiToken.value },
+                        routerModeProvider = { _apiRouterEnabled.value },
+                        routerLoader = { modelId -> loadModelForApi(modelId) },
+                        routerUnloader = { modelId -> unloadModelForApi(modelId) },
                     )
                 }
                 _apiServerEnabled.value = true
+                addBackgroundClient()
             }
         }
     }
 
      fun loadModel(model: LocalModel, modality: Modality = _selectedModality.value) {
-Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
-        
+        viewModelScope.launch {
+            loadModelInternal(model, modality)
+        }
+    }
+
+    /**
+     * Loads a model by its API id (llama.cpp router mode). Runs through the same
+     * path as the UI's loadModel so guards, load status, chat clearing and the
+     * server's model id stay consistent. Returns false if the model is unknown
+     * or the load failed / was refused (busy).
+     */
+    suspend fun loadModelForApi(modelId: String): Boolean {
+        val model = manager.models.value.firstOrNull { it.id == modelId } ?: return false
+        return loadModelInternal(model, _selectedModality.value)
+    }
+
+    /**
+     * Shared load core (UI and API router). Assumes the caller's dispatcher can
+     * block (it runs on Dispatchers.IO internally for the engine calls).
+     */
+    private suspend fun loadModelInternal(model: LocalModel, modality: Modality): Boolean {
+        Log.d("MainViewModel", "Loading model: ${model.name} modality=$modality")
+
         // Validate model file exists
         val modelFile = java.io.File(model.absolutePath)
         if (!modelFile.exists() || !modelFile.isFile) {
@@ -403,59 +469,59 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
             _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
                 this[model.name] = ModelLoadStatus.Failed
             }
-            return
+            return false
         }
-        
-        viewModelScope.launch {
-            if (_isLoadingModel.value != null) {
-                Log.w("MainViewModel", "Load ignored: another model is already loading")
-                return@launch
+
+        if (_isLoadingModel.value != null) {
+            Log.w("MainViewModel", "Load ignored: another model is already loading")
+            return false
+        }
+        // If a model is currently unloading, wait for it to finish before
+        // starting the new load, otherwise the in-flight unload can race the
+        // new load (unloading the freshly-loaded engine and leaving the UI
+        // reporting the wrong model).
+        while (_modelLoadStatus.value.any { it.value == ModelLoadStatus.Unloading }) {
+            Log.d("MainViewModel", "Waiting for model unload to finish before loading ${model.name}")
+            delay(50)
+        }
+        _engineMessage.value = null
+        _isLoadingModel.value = model.name
+        _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
+            this[model.name] = ModelLoadStatus.Loading
+            this.keys.filter { it != model.name }.forEach { key ->
+                this[key] = if (_selectedModel.value?.name == key) ModelLoadStatus.Unloading else ModelLoadStatus.Idle
             }
-            // If a model is currently unloading, wait for it to finish before
-            // starting the new load, otherwise the in-flight unload can race the
-            // new load (unloading the freshly-loaded engine and leaving the UI
-            // reporting the wrong model).
-            while (_modelLoadStatus.value.any { it.value == ModelLoadStatus.Unloading }) {
-                Log.d("MainViewModel", "Waiting for model unload to finish before loading ${model.name}")
-                delay(50)
+        }
+        return try {
+            withContext(Dispatchers.IO) {
+                if (engine.isLoaded) engine.unload()
+                engine.load(model.absolutePath, _params.value, modality)
+                engine.clearHistory()
             }
-            _engineMessage.value = null
-            _isLoadingModel.value = model.name
+            _selectedModel.value = model
+            syncServerModelId()
             _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
-                this[model.name] = ModelLoadStatus.Loading
-                this.keys.filter { it != model.name }.forEach { key ->
-                    this[key] = if (_selectedModel.value?.name == key) ModelLoadStatus.Unloading else ModelLoadStatus.Idle
+                this[model.name] = ModelLoadStatus.Success
+                this.keys.filter { it != model.name && this[it] == ModelLoadStatus.Unloading }.forEach {
+                    this[it] = ModelLoadStatus.Idle
                 }
             }
-            try {
-                withContext(Dispatchers.IO) {
-                    if (engine.isLoaded) engine.unload()
-                    engine.load(model.absolutePath, _params.value, modality)
-                    engine.clearHistory()
+            clearChat()
+            true
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Failed to load model: ${model.name}", e)
+            _selectedModel.value = null
+            syncServerModelId()
+            _engineMessage.value = e.message ?: "Failed to load model"
+            _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
+                this[model.name] = ModelLoadStatus.Failed
+                this.keys.filter { it != model.name && this[it] == ModelLoadStatus.Unloading }.forEach {
+                    this[it] = ModelLoadStatus.Idle
                 }
-                _selectedModel.value = model
-                syncServerModelId()
-                _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
-                    this[model.name] = ModelLoadStatus.Success
-                    this.keys.filter { it != model.name && this[it] == ModelLoadStatus.Unloading }.forEach {
-                        this[it] = ModelLoadStatus.Idle
-                    }
-                }
-                clearChat()
-            } catch (e: Exception) {
-                Log.e("MainViewModel", "Failed to load model: ${model.name}", e)
-                _selectedModel.value = null
-                syncServerModelId()
-                _engineMessage.value = e.message ?: "Failed to load model"
-                _modelLoadStatus.value = _modelLoadStatus.value.toMutableMap().apply {
-                    this[model.name] = ModelLoadStatus.Failed
-                    this.keys.filter { it != model.name && this[it] == ModelLoadStatus.Unloading }.forEach {
-                        this[it] = ModelLoadStatus.Idle
-                    }
-                }
-            } finally {
-                _isLoadingModel.value = null
             }
+            false
+        } finally {
+            _isLoadingModel.value = null
         }
     }
 
@@ -474,6 +540,28 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
                     _modelLoadStatus.value = _modelLoadStatus.value + (m.name to ModelLoadStatus.Idle)
                 }
             }
+        }
+    }
+
+    /**
+     * Unloads a model by its API id (llama.cpp POST /models/unload). Returns
+     * false when the model is not the currently loaded one.
+     */
+    suspend fun unloadModelForApi(modelId: String): Boolean {
+        val selected = _selectedModel.value ?: return false
+        if (selected.id != modelId) return false
+        unloadModelInternal(selected)
+        return true
+    }
+
+    private suspend fun unloadModelInternal(model: LocalModel) {
+        _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Unloading)
+        _selectedModel.value = null
+        syncServerModelId()
+        try {
+            withContext(Dispatchers.IO) { engine.unload() }
+        } finally {
+            _modelLoadStatus.value = _modelLoadStatus.value + (model.name to ModelLoadStatus.Idle)
         }
     }
 
@@ -583,6 +671,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
         _pendingTextFile.value = null
         _pendingVideo.value = null
         _isGenerating.value = true
+        addBackgroundClient()
 
         generationJob = viewModelScope.launch {
             try {
@@ -667,6 +756,7 @@ Log.d("MainViewModel", "Loading model: ${model.name} modality=${modality}")
                         }
                     }
                 }
+                releaseBackgroundClient()
             }
         }
     }

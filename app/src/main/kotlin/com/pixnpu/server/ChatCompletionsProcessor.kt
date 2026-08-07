@@ -48,6 +48,15 @@ sealed class ChatCompletionError(
             "busy",
             429,
         )
+
+    class ModelLoadFailed :
+        ChatCompletionError(
+            "The requested model could not be loaded (busy or load failed)",
+            "server_error",
+            null,
+            "model_load_failed",
+            503,
+        )
 }
 
 /**

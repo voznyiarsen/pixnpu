@@ -9,6 +9,7 @@ import com.pixnpu.engine.InferenceMetrics
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.Modality
 import com.pixnpu.engine.PromptTemplate
+import com.pixnpu.model.LocalModel
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -80,6 +81,10 @@ class LlamaApiTest {
     private fun testServer(
         engine: FakeEngine,
         token: String? = null,
+        models: List<LocalModel> = emptyList(),
+        routerMode: Boolean = false,
+        routerLoader: suspend (String) -> Boolean = { true },
+        routerUnloader: suspend (String) -> Boolean = { true },
         block: suspend io.ktor.client.HttpClient.() -> Unit,
     ) {
         val context = mockk<Context>(relaxed = true)
@@ -91,6 +96,10 @@ class LlamaApiTest {
                     modelIdProvider = { engine.modelId },
                     modelPathProvider = { engine.modelPath },
                     tokenProvider = { token },
+                    modelsProvider = { models },
+                    routerModeProvider = { routerMode },
+                    routerLoader = routerLoader,
+                    routerUnloader = routerUnloader,
                 )
             }
             val client = createClient { }
@@ -245,6 +254,165 @@ class LlamaApiTest {
             assertEquals(8192, body.defaultGenerationSettings.nCtx)
             assertEquals(1024, body.defaultGenerationSettings.nPredict)
             assertEquals(0.7, body.defaultGenerationSettings.temperature, 1e-6)
+        }
+
+    @Test
+    fun `props reports jinja chat template for known model families`() =
+        testServer(FakeEngine().apply { modelId = "gemma3-270m-it-q8"; modelPath = "/models/gemma3-270m-it-q8.litertlm" }) {
+            val response = get("/props")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<LlamaProps>(response.bodyAsText())
+            assertNotNull(body.chatTemplate)
+            assertTrue(body.chatTemplate!!.contains("<start_of_turn>"))
+            assertEquals("<bos>", body.bosToken)
+            assertEquals("<eos>", body.eosToken)
+        }
+
+    @Test
+    fun `props reports null chat template for unknown models`() =
+        testServer(FakeEngine().apply { modelId = "m" }) {
+            val response = get("/props")
+            val body = json.decodeFromString<LlamaProps>(response.bodyAsText())
+            assertEquals(null, body.chatTemplate)
+            assertEquals(null, body.bosToken)
+        }
+
+    @Test
+    fun `props reports router fields in router mode`() =
+        testServer(FakeEngine(), models = routerModels, routerMode = true) {
+            val response = get("/props")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<LlamaProps>(response.bodyAsText())
+            assertEquals("router", body.role)
+            assertEquals("llama-server", body.modelAlias)
+            assertEquals("none", body.modelPath)
+            assertEquals(1, body.maxInstances)
+            assertEquals(true, body.modelsAutoload)
+        }
+
+    @Test
+    fun `props with model param reports that model's path and template`() =
+        testServer(FakeEngine(), models = routerModels, routerMode = true) {
+            val response = get("/props?model=llama3-2")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<LlamaProps>(response.bodyAsText())
+            assertEquals("/models/llama3-2.litertlm", body.modelPath)
+            assertEquals("llama3-2", body.modelAlias)
+            assertNotNull(body.chatTemplate)
+            assertTrue(body.chatTemplate!!.contains("start_header_id"))
+        }
+
+    @Test
+    fun `props with unknown model param returns 404 in router mode`() =
+        testServer(FakeEngine(), models = routerModels, routerMode = true) {
+            val response = get("/props?model=nope")
+            assertEquals(HttpStatusCode.NotFound, response.status)
+        }
+
+    // --- router model management ---
+
+    private val routerModels = listOf(
+        LocalModel("gemma3-270m-it-q8.litertlm", "/models/gemma3-270m-it-q8.litertlm", 100, 1000, null, false),
+        LocalModel("llama3-2.litertlm", "/models/llama3-2.litertlm", 200, 2000, null, false),
+    )
+
+    @Test
+    fun `models lists all models with status in router mode`() =
+        testServer(FakeEngine().apply { modelId = "gemma3-270m-it-q8" }, models = routerModels, routerMode = true) {
+            val response = get("/models")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<ModelListResponse>(response.bodyAsText())
+            assertEquals(2, body.data.size)
+            assertEquals("loaded", body.data[0].status?.value)
+            assertEquals("not loaded", body.data[1].status?.value)
+        }
+
+    @Test
+    fun `models returns 404 when router mode is disabled`() = testServer(FakeEngine()) {
+        val response = get("/models")
+        assertEquals(HttpStatusCode.NotFound, response.status)
+    }
+
+    @Test
+    fun `models load loads a model by id`() {
+        var loadedId: String? = null
+        testServer(
+            FakeEngine(),
+            models = routerModels,
+            routerMode = true,
+            routerLoader = { id -> loadedId = id; true },
+        ) {
+            val response = post("/models/load") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2"}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertTrue(response.bodyAsText().contains("success"))
+        }
+        assertEquals("llama3-2", loadedId)
+    }
+
+    @Test
+    fun `models load rejects already loaded model`() =
+        testServer(FakeEngine().apply { modelId = "llama3-2" }, models = routerModels, routerMode = true) {
+            val response = post("/models/load") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2"}""")
+            }
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            val body = json.decodeFromString<LlamaError>(response.bodyAsText())
+            assertTrue(body.error.contains("already loaded"))
+        }
+
+    @Test
+    fun `models load rejects unknown model`() =
+        testServer(FakeEngine(), models = routerModels, routerMode = true) {
+            val response = post("/models/load") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"nope"}""")
+            }
+            assertEquals(HttpStatusCode.NotFound, response.status)
+        }
+
+    @Test
+    fun `models load 503 when the load fails`() =
+        testServer(FakeEngine(), models = routerModels, routerMode = true, routerLoader = { false }) {
+            val response = post("/models/load") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2"}""")
+            }
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        }
+
+    @Test
+    fun `models unload unloads the loaded model`() {
+        var unloadedId: String? = null
+        testServer(
+            FakeEngine().apply { modelId = "llama3-2" },
+            models = routerModels,
+            routerMode = true,
+            routerUnloader = { id -> unloadedId = id; true },
+        ) {
+            val response = post("/models/unload") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2"}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertTrue(response.bodyAsText().contains("success"))
+        }
+        assertEquals("llama3-2", unloadedId)
+    }
+
+    @Test
+    fun `models unload rejects a model that is not loaded`() =
+        testServer(FakeEngine().apply { modelId = "gemma3-270m-it-q8" }, models = routerModels, routerMode = true) {
+            val response = post("/models/unload") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2"}""")
+            }
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            val body = json.decodeFromString<LlamaError>(response.bodyAsText())
+            assertTrue(body.error.contains("not loaded"))
         }
 
     // --- GET /slots ---

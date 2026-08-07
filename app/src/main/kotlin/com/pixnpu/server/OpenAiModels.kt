@@ -3,6 +3,7 @@ package com.pixnpu.server
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class ChatMessage(
@@ -100,7 +101,18 @@ data class ModelInfo(
     val id: String,
     @SerialName("object") val obj: String = "model",
     val created: Long,
-    @SerialName("owned_by") val ownedBy: String = "pixnpu",
+    @SerialName("owned_by") val ownedBy: String = "llamacpp",
+    val aliases: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    /** Router-mode status ("loaded" / "not loaded"), absent in single-model mode. */
+    val status: ModelStatus? = null,
+)
+
+/** llama.cpp router /v1/models + /models status object. */
+@Serializable
+data class ModelStatus(
+    val value: String,
+    val args: JsonObject = JsonObject(emptyMap()),
 )
 
 @Serializable
@@ -109,16 +121,28 @@ data class ModelListResponse(
     val data: List<ModelInfo> = emptyList(),
 )
 
+/**
+ * Service identity advertised at GET /.
+ *
+ * Branded as llama.cpp so API-discovery clients (LM Studio, Open WebUI,
+ * SillyTavern, ...) recognize the server; [impl] names the actual backend.
+ */
 @Serializable
 data class ServiceInfo(
-    val service: String = "pixnpu",
+    val service: String = "llama.cpp",
+    val impl: String = "pixnpu",
     val api: String = "v1",
+    val mode: String = "single-model",
+    val version: String = "1.0.0",
     val endpoints: List<String> = listOf(
         "/v1/models",
         "/v1/chat/completions",
         "/completion",
         "/props",
         "/slots",
+        "/models",
+        "/models/load",
+        "/models/unload",
         "/tokenize",
         "/detokenize",
     ),

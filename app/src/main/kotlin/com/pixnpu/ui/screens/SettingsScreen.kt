@@ -76,6 +76,7 @@ fun SettingsScreen(
     modality: Modality,
     isGenerating: Boolean,
     apiServerEnabled: Boolean,
+    apiRouterEnabled: Boolean,
     apiHost: String,
     apiPort: Int,
     apiServerUrl: String,
@@ -88,6 +89,7 @@ fun SettingsScreen(
     onChangeTemplate: (PromptTemplate) -> Unit,
     onModalityChange: (Modality) -> Unit,
     onToggleApiServer: () -> Unit,
+    onToggleApiRouter: (Boolean) -> Unit,
     onApiHostChange: (String) -> Unit,
     onApiPortChange: (Int) -> Unit,
     onApiTokenChange: (String) -> Unit,
@@ -131,6 +133,17 @@ fun SettingsScreen(
             checked = apiServerEnabled,
             onCheckedChange = { onToggleApiServer() },
         )
+        ToggleRow(
+            title = "Router Mode",
+            subtitle = if (apiRouterEnabled) {
+                "llama.cpp router — requests name any installed model and it is " +
+                    "loaded on demand; the server can start without a loaded model"
+            } else {
+                "Serve the loaded model only (llama.cpp single-model mode)"
+            },
+            checked = apiRouterEnabled,
+            onCheckedChange = onToggleApiRouter,
+        )
         BindAddressRow(
             host = apiHost,
             port = apiPort,
@@ -163,7 +176,8 @@ fun SettingsScreen(
             )
         }
         Text(
-            text = "Endpoints: GET /v1/models · POST /v1/chat/completions",
+            text = "Endpoints: /v1/chat/completions · /v1/models · /completion · /props · " +
+                "/slots · /models[/load|/unload] · /tokenize · /detokenize",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

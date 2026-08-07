@@ -105,6 +105,17 @@ data class LlamaProps(
     @SerialName("chat_template") val chatTemplate: String? = null,
     @SerialName("model_path") val modelPath: String? = null,
     @SerialName("system_prompt") val systemPrompt: String = "",
+    /** "router" in router mode, "model" otherwise (llama.cpp ServerRole). */
+    val role: String = "model",
+    /** Router-mode identity (llama.cpp returns "llama-server"). */
+    @SerialName("model_alias") val modelAlias: String? = null,
+    /** Router-mode: number of models the router can keep loaded (1 engine slot). */
+    @SerialName("max_instances") val maxInstances: Int? = null,
+    /** Router-mode: models are loaded on demand. */
+    @SerialName("models_autoload") val modelsAutoload: Boolean? = null,
+    /** Jinja template of the loaded model (llama.cpp GGUF chat_template). */
+    @SerialName("bos_token") val bosToken: String? = null,
+    @SerialName("eos_token") val eosToken: String? = null,
 )
 
 @Serializable
@@ -139,4 +150,10 @@ data class LlamaDetokenizeRequest(
 @Serializable
 data class LlamaError(
     val error: String,
+)
+
+/** Body of the router management endpoints (llama.cpp /models/load, /models/unload). */
+@Serializable
+data class RouterModelRequest(
+    val model: String = "",
 )

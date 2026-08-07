@@ -8,3 +8,6 @@ data class LocalModel(
     val sha256: String?,
     val verified: Boolean,
 )
+
+/** The API model id for a local model file (file base name, like llama.cpp --alias). */
+val LocalModel.id: String get() = name.removeSuffix(".litertlm")

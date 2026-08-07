@@ -136,8 +136,19 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   must be WAV — miniaudio constraint, same as the app UI).
 - One generation at a time (shared engine with the UI): busy → HTTP 429 `code:"busy"`.
   Unknown model id → **404** `code:"model_not_found"` (matches OpenAI, not 400).
-- Toggle: **API Server switch in the Settings tab** (needs a loaded model). Server dies
-  with the process — no foreground service. Follow-ups: https image URLs.
+- Toggle: **API Server switch in the Settings tab**. The server (and any UI
+  generation) keeps running when the app loses focus or the screen turns off:
+  `PixNpuForegroundService` (dataSync FGS) holds a partial wake lock and is
+  reference-counted by MainViewModel (generation + server are the two clients).
+  Follow-ups: https image URLs.
+- **Branding**: the API advertises itself as llama.cpp — `GET /` returns
+  `ServiceInfo` with `service: "llama.cpp"`, `impl: "pixnpu"` and `mode`
+  (`"router"`/`"single-model"`); `/health` is llama.cpp-style
+  `{"status":"ok"}` / `{"status":"error","slots_idle":0}`; `/v1/models` entries
+  have `owned_by: "llamacpp"`. `/props` reports the loaded model's Jinja
+  `chat_template` + `bos_token`/`eos_token` (family detected from the model id
+  via `server/ChatTemplates.kt`; unknown models → null — LiteRT-LM formats
+  internally, so templates are informational for clients).
 - **llama.cpp server-compatible API** (`server/LlamaApi.kt` + `LlamaModels.kt`, mounted
   in the same Ktor module, same optional Bearer auth, same shared busy gate):
   - `POST /completion` — raw prompt (string only; token-id arrays → 400, no tokenizer),
@@ -150,8 +161,22 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
     `truncated` = predicted_n >= n_predict. Busy → **503 `{"error":"Slot busy"}`**;
     no model → 503.
   - `GET /props` — `default_generation_settings` (engine defaults, `n_ctx` from metrics),
-    `total_slots: 1`, `model_path`, `chat_template: null` (no GGUF template).
+    `total_slots: 1`, `model_path`, `chat_template` + `bos_token`/`eos_token` from
+    `ChatTemplates` (null for unknown families). **Router mode**: no `?model=` →
+    `role: "router"`, `model_alias: "llama-server"`, `model_path: "none"` when nothing
+    is loaded, `max_instances: 1`, `models_autoload: true`; `?model=<id>` → that
+    model's props (404 for unknown ids).
   - `GET /slots` — one slot, `state` "idle"/"processing" from `metrics.status`.
+  - **Router mode** (Settings toggle, pref `api_router_enabled`, read per request):
+    the server can start with no model loaded and `POST /v1/chat/completions` with
+    any installed model id auto-loads it on demand (via `MainViewModel.loadModelForApi`,
+    which reuses the UI load path so guards/status/chat-clear stay consistent); the
+    busy gate is held across load + generation. `GET /v1/models` and `GET /models`
+    list every installed model with `status: {"value": "loaded"|"not loaded"}` and
+    `owned_by: "llamacpp"`. `POST /models/load` / `POST /models/unload` manage the
+    loaded model (`{"success": true}`; unknown → 404; wrong state → 400). Requests
+    naming a model that isn't installed → 404; load failure → 503 `model_load_failed`;
+    all router endpoints share the Bearer auth.
   - `POST /tokenize` and `POST /detokenize` — **always 501**: LiteRT-LM 0.15.0 exposes
     only `Conversation.getTokenCount()` (count, no ids, no detokenizer); 501 beats
     fabricated token ids.
@@ -292,6 +317,17 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   1.9 renamed the old `Key.Del`/`Key.ForwardDel`) with empty input, the pending
   attachment (image → audio → file → video) is removed instead of nothing
   happening.
+
+### Background generation
+- **`PixNpuForegroundService`** (dataSync FGS + partial wake lock) keeps the
+  process alive and the CPU awake when the app loses focus or the screen turns
+  off, so a running generation or the API server is not killed mid-reply.
+  Reference-counted by MainViewModel (`backgroundClients`): started when a
+  generation begins or the API server is turned on, stopped (service + wake
+  lock released) when both are idle. Requires `FOREGROUND_SERVICE`,
+  `FOREGROUND_SERVICE_DATA_SYNC` and `WAKE_LOCK` permissions; service declared
+  with `android:foregroundServiceType="dataSync"`, `START_NOT_STICKY` (a
+  restarted empty service would only hold a pointless wake lock).
 
 ### Reliability / hardening (audit remediation)
 - **Cancellation-safe engine metrics**: in `LiteRTLMEngine.generateInternal` the

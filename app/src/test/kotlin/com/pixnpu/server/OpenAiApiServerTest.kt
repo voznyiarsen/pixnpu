@@ -9,6 +9,7 @@ import com.pixnpu.engine.InferenceMetrics
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.Modality
 import com.pixnpu.engine.PromptTemplate
+import com.pixnpu.model.LocalModel
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -77,6 +78,10 @@ class OpenAiApiServerTest {
     private fun testServer(
         engine: FakeEngine,
         token: String? = null,
+        models: List<LocalModel> = emptyList(),
+        routerMode: Boolean = false,
+        routerLoader: suspend (String) -> Boolean = { true },
+        routerUnloader: suspend (String) -> Boolean = { true },
         block: suspend io.ktor.client.HttpClient.() -> Unit,
     ) {
         val context = mockk<Context>(relaxed = true)
@@ -87,6 +92,10 @@ class OpenAiApiServerTest {
                     context = context,
                     modelIdProvider = { engine.modelId },
                     tokenProvider = { token },
+                    modelsProvider = { models },
+                    routerModeProvider = { routerMode },
+                    routerLoader = routerLoader,
+                    routerUnloader = routerUnloader,
                 )
             }
             val client = createClient { }
@@ -117,11 +126,135 @@ class OpenAiApiServerTest {
     // --- /health ---
 
     @Test
-    fun `health returns service info`() = testServer(FakeEngine()) {
+    fun `health returns ok status`() = testServer(FakeEngine()) {
         val response = get("/health")
         assertEquals(HttpStatusCode.OK, response.status)
-        assertTrue(response.bodyAsText().contains("pixnpu"))
+        assertEquals("""{"status":"ok"}""", response.bodyAsText())
     }
+
+    @Test
+    fun `health reports busy while generating`() =
+        testServer(FakeEngine(status = EngineStatus.Generating)) {
+            val response = get("/health")
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertEquals("""{"status":"error","slots_idle":0}""", response.bodyAsText())
+        }
+
+    // --- service identity ---
+
+    @Test
+    fun `service advertises as llama cpp`() = testServer(FakeEngine()) {
+        val response = get("/")
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = json.decodeFromString<ServiceInfo>(response.bodyAsText())
+        assertEquals("llama.cpp", body.service)
+        assertEquals("pixnpu", body.impl)
+        assertEquals("single-model", body.mode)
+    }
+
+    @Test
+    fun `service advertises router mode`() = testServer(FakeEngine(), routerMode = true) {
+        val response = get("/")
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = json.decodeFromString<ServiceInfo>(response.bodyAsText())
+        assertEquals("router", body.mode)
+    }
+
+    // --- router mode ---
+
+    private val routerModels = listOf(
+        LocalModel("gemma3-270m-it-q8.litertlm", "/models/gemma3-270m-it-q8.litertlm", 100, 1000, null, false),
+        LocalModel("llama3-2.litertlm", "/models/llama3-2.litertlm", 200, 2000, null, false),
+    )
+
+    @Test
+    fun `router models list reports all installed models with status`() =
+        testServer(FakeEngine().apply { modelId = "gemma3-270m-it-q8" }, models = routerModels, routerMode = true) {
+            val response = get("/v1/models")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<ModelListResponse>(response.bodyAsText())
+            assertEquals(2, body.data.size)
+            assertEquals("gemma3-270m-it-q8", body.data[0].id)
+            assertEquals("loaded", body.data[0].status?.value)
+            assertEquals("not loaded", body.data[1].status?.value)
+            assertEquals("llamacpp", body.data[0].ownedBy)
+        }
+
+    @Test
+    fun `router completion auto-loads the requested model`() {
+        val engine = FakeEngine(loaded = false)
+        var loaded: String? = null
+        testServer(
+            engine,
+            models = routerModels,
+            routerMode = true,
+            routerLoader = { id -> loaded = id; true },
+        ) {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<ChatCompletionResponse>(response.bodyAsText())
+            assertEquals("llama3-2", body.model)
+        }
+        assertEquals("llama3-2", loaded)
+    }
+
+    @Test
+    fun `router completion does not reload the already loaded model`() {
+        val engine = FakeEngine().apply { modelId = "gemma3-270m-it-q8" }
+        var loadCalls = 0
+        testServer(
+            engine,
+            models = routerModels,
+            routerMode = true,
+            routerLoader = { id -> loadCalls++; true },
+        ) {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"gemma3-270m-it-q8","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+        }
+        assertEquals(0, loadCalls)
+    }
+
+    @Test
+    fun `router completion 404s for an unknown model`() =
+        testServer(FakeEngine(loaded = false), models = routerModels, routerMode = true) {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"nope","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.NotFound, response.status)
+            val body = json.decodeFromString<ApiError>(response.bodyAsText())
+            assertEquals("model_not_found", body.error.code)
+        }
+
+    @Test
+    fun `router completion 503s when the model fails to load`() =
+        testServer(FakeEngine(loaded = false), models = routerModels, routerMode = true, routerLoader = { false }) {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"llama3-2","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            val body = json.decodeFromString<ApiError>(response.bodyAsText())
+            assertEquals("model_load_failed", body.error.code)
+        }
+
+    @Test
+    fun `router completion without a model and nothing loaded returns 400`() =
+        testServer(FakeEngine(loaded = false), models = routerModels, routerMode = true) {
+            val response = post("/v1/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            val body = json.decodeFromString<ApiError>(response.bodyAsText())
+            assertEquals("no_model_loaded", body.error.code)
+        }
 
     // --- non-streaming completion ---
 

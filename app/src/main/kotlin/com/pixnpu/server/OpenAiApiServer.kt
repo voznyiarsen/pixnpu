@@ -5,6 +5,9 @@ import android.util.Log
 import com.pixnpu.engine.EngineStatus
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.PromptTemplate
+import com.pixnpu.model.LocalModel
+import com.pixnpu.model.ModelManagerInterface
+import com.pixnpu.model.id
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -32,6 +35,8 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 private const val TAG = "OpenAiApiServer"
 
@@ -57,6 +62,7 @@ private const val TAG = "OpenAiApiServer"
 class OpenAiApiServer(
     private val context: Context,
     private val engine: LiteRTLMEngineInterface,
+    private val modelManager: ModelManagerInterface,
 ) {
     companion object {
         /** Loopback only — the safe default. */
@@ -106,6 +112,9 @@ class OpenAiApiServer(
         host: String = HOST,
         port: Int = PORT,
         tokenProvider: () -> String? = { null },
+        routerModeProvider: () -> Boolean = { false },
+        routerLoader: suspend (String) -> Boolean = { false },
+        routerUnloader: suspend (String) -> Boolean = { false },
     ) {
         synchronized(lifecycleLock) {
             if (server != null) {
@@ -119,6 +128,10 @@ class OpenAiApiServer(
                     modelIdProvider = { currentModelId },
                     modelPathProvider = { modelPathRef.get() },
                     tokenProvider = tokenProvider,
+                    modelsProvider = { modelManager.models.value },
+                    routerModeProvider = routerModeProvider,
+                    routerLoader = routerLoader,
+                    routerUnloader = routerUnloader,
                 )
             }
             server = instance
@@ -143,6 +156,12 @@ class OpenAiApiServer(
 
 /**
  * Top-level module so tests can mount the same routes via ktor testApplication.
+ *
+ * @param routerModeProvider true = llama.cpp router mode: any installed model can
+ *        be requested and is loaded on demand; /v1/models lists every model.
+ * @param routerLoader loads a model by id for a router-mode request; return true
+ *        on success. Wired to MainViewModel so UI state stays in sync.
+ * @param routerUnloader unloads a model by id (llama.cpp POST /models/unload).
  */
 fun Application.openAiApiModule(
     engine: LiteRTLMEngineInterface,
@@ -150,6 +169,10 @@ fun Application.openAiApiModule(
     modelIdProvider: () -> String?,
     modelPathProvider: () -> String? = { null },
     tokenProvider: () -> String? = { null },
+    modelsProvider: () -> List<LocalModel> = { emptyList() },
+    routerModeProvider: () -> Boolean = { false },
+    routerLoader: suspend (String) -> Boolean = { false },
+    routerUnloader: suspend (String) -> Boolean = { false },
 ) {
     val json = Json {
         ignoreUnknownKeys = true
@@ -177,8 +200,31 @@ fun Application.openAiApiModule(
     }
 
     routing {
-        get("/") { call.respond(ServiceInfo()) }
-        get("/health") { call.respond(ServiceInfo()) }
+        get("/") {
+            // Advertised as llama.cpp so API-discovery clients recognize the
+            // server; `impl`/`mode` name the actual backend and operating mode.
+            call.respond(
+                ServiceInfo(
+                    mode = if (routerModeProvider()) "router" else "single-model",
+                ),
+            )
+        }
+        get("/health") {
+            // llama.cpp /health: {"status":"ok"}, or error while all slots are busy.
+            val busy = engine.metrics.value.status == EngineStatus.Generating ||
+                inFlight.get()
+            if (busy) {
+                call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    buildJsonObject {
+                        put("status", "error")
+                        put("slots_idle", 0)
+                    },
+                )
+            } else {
+                call.respond(buildJsonObject { put("status", "ok") })
+            }
+        }
 
         get("/v1/models") {
             if (unauthorized(call)) {
@@ -187,10 +233,26 @@ fun Application.openAiApiModule(
                     ApiError(ErrorBody("Incorrect API key provided", code = "invalid_api_key")),
                 )
             }
-            val modelId = modelIdProvider()
-            val data = modelId?.let {
-                listOf(ModelInfo(id = it, created = System.currentTimeMillis() / 1000))
-            } ?: emptyList()
+            val router = routerModeProvider()
+            val loadedId = modelIdProvider()
+            val now = System.currentTimeMillis() / 1000
+            val data = if (router) {
+                // Router mode: every installed model, with llama.cpp status.
+                modelsProvider().map { model ->
+                    ModelInfo(
+                        id = model.id,
+                        created = model.lastModified / 1000,
+                        aliases = listOf(model.id),
+                        status = ModelStatus(
+                            value = if (model.id == loadedId) "loaded" else "not loaded",
+                        ),
+                    )
+                }
+            } else {
+                loadedId?.let {
+                    listOf(ModelInfo(id = it, created = now))
+                } ?: emptyList()
+            }
             call.respond(ModelListResponse(data = data))
         }
 
@@ -211,7 +273,18 @@ fun Application.openAiApiModule(
                 )
             }
             try {
-                handleChatCompletion(call, engine, processor, json, modelIdProvider, inFlight, request)
+                handleChatCompletion(
+                    call,
+                    engine,
+                    processor,
+                    json,
+                    modelIdProvider,
+                    modelsProvider,
+                    routerModeProvider,
+                    routerLoader,
+                    inFlight,
+                    request,
+                )
             } catch (e: ChatCompletionError) {
                 call.respond(
                     HttpStatusCode.fromValue(e.status),
@@ -242,28 +315,59 @@ fun Application.openAiApiModule(
             modelPathProvider = modelPathProvider,
             tokenProvider = tokenProvider,
             inFlight = inFlight,
+            modelsProvider = modelsProvider,
+            routerModeProvider = routerModeProvider,
+            routerLoader = routerLoader,
+            routerUnloader = routerUnloader,
         )
     }
 }
 
+/**
+ * Router-mode model resolution:
+ *  - request names the loaded model (or no model) -> use it as-is
+ *  - router mode, request names an installed model -> load it on demand
+ *  - router mode, request names something unknown -> 404
+ *  - single-model mode, request names a different model -> 404
+ *
+ * The busy gate is acquired once and held across the auto-load AND the
+ * generation, so a slow NPU load cannot race another request in between.
+ */
 private suspend fun handleChatCompletion(
     call: ApplicationCall,
     engine: LiteRTLMEngineInterface,
     processor: ChatCompletionsProcessor,
     json: Json,
     modelIdProvider: () -> String?,
+    modelsProvider: () -> List<LocalModel>,
+    routerModeProvider: () -> Boolean,
+    routerLoader: suspend (String) -> Boolean,
     inFlight: AtomicBoolean,
     request: ChatCompletionRequest,
 ) {
-    val modelId = modelIdProvider()
-    if (!engine.isLoaded) throw ChatCompletionError.NoModelLoaded()
-    if (request.model != null && request.model != modelId) {
-        throw ChatCompletionError.ModelNotFound(request.model)
+    val router = routerModeProvider()
+    val requested = request.model
+    val loadedId = modelIdProvider()
+
+    if (requested == null || requested == loadedId) {
+        // Same-model (or unspecified) request: a model must be resident.
+        if (!engine.isLoaded) throw ChatCompletionError.NoModelLoaded()
+    } else if (!router) {
+        throw ChatCompletionError.ModelNotFound(requested)
+    } else if (modelsProvider().none { it.id == requested }) {
+        throw ChatCompletionError.ModelNotFound(requested)
     }
+
     if (engine.metrics.value.status == EngineStatus.Generating || !inFlight.compareAndSet(false, true)) {
         throw ChatCompletionError.Busy()
     }
     try {
+        // Auto-load the requested model (router mode) before generating.
+        var model = loadedId
+        if (requested != null && requested != loadedId) {
+            if (!routerLoader(requested)) throw ChatCompletionError.ModelLoadFailed()
+            model = modelIdProvider() ?: requested
+        }
         val contents = processor.buildContent(request)
         val params = processor.effectiveParams(request)
         val flow = engine.generate(
@@ -274,7 +378,7 @@ private suspend fun handleChatCompletion(
         )
         val id = "chatcmpl-${UUID.randomUUID()}"
         val created = System.currentTimeMillis() / 1000
-        val model = modelId ?: "unknown"
+        val modelName = model ?: "unknown"
         val promptText = contents.filterIsInstance<com.google.ai.edge.litertlm.Content.Text>()
             .joinToString(" ") { it.text }
 
@@ -285,7 +389,7 @@ private suspend fun handleChatCompletion(
                 json,
                 id,
                 created,
-                model,
+                modelName,
                 promptText,
                 includeUsage,
                 processor,
@@ -297,7 +401,7 @@ private suspend fun handleChatCompletion(
                 ChatCompletionResponse(
                     id = id,
                     created = created,
-                    model = model,
+                    model = modelName,
                     choices = listOf(Choice(message = ResponseMessage(content = reply))),
                     usage = processor.estimateUsage(promptText, reply),
                 ),

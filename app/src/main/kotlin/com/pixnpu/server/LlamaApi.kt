@@ -6,6 +6,8 @@ import com.pixnpu.engine.EngineStatus
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.PromptTemplate
+import com.pixnpu.model.LocalModel
+import com.pixnpu.model.id
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -39,8 +41,13 @@ private const val MAX_PROMPT_CHARS = 32000
  *  - POST /completion    text completion (JSON or SSE streaming; the SSE stream
  *                        ends on a `"stop":true` frame — llama.cpp sends no
  *                        [DONE] terminator here)
- *  - GET  /props         default generation settings + model info
+ *  - GET  /props         default generation settings + model info; router mode
+ *                        advertises `role: "router"` (llama.cpp style) and
+ *                        accepts `?model=<id>` for a specific model
  *  - GET  /slots         slot state (exactly one shared slot)
+ *  - GET  /models        router mode: every installed model + status
+ *  - POST /models/load   router mode: load a model by id
+ *  - POST /models/unload router mode: unload a model by id
  *  - POST /tokenize      always 501: LiteRT-LM exposes no tokenizer
  *  - POST /detokenize    always 501: there is no detokenizer
  *
@@ -54,6 +61,10 @@ fun Route.llamaApiRoutes(
     modelPathProvider: () -> String?,
     tokenProvider: () -> String?,
     inFlight: AtomicBoolean,
+    modelsProvider: () -> List<LocalModel> = { emptyList() },
+    routerModeProvider: () -> Boolean = { false },
+    routerLoader: suspend (String) -> Boolean = { false },
+    routerUnloader: suspend (String) -> Boolean = { false },
 ) {
     fun unauthorized(call: ApplicationCall): Boolean {
         val expected = tokenProvider()
@@ -147,14 +158,60 @@ fun Route.llamaApiRoutes(
         if (unauthorized(call)) {
             return@get authError(call)
         }
+        val router = routerModeProvider()
         val modelId = modelIdProvider()
-        call.respond(
-            LlamaProps(
-                defaultGenerationSettings = defaultSettings(engine, modelId),
-                modelPath = modelPathProvider(),
-                chatTemplate = null,
-            ),
-        )
+        if (router) {
+            // Router-mode /props: no ?model= -> the router itself (llama.cpp
+            // returns role "router" + model_path "none"); ?model=<id> -> that
+            // model's props (the loaded model's settings when it's resident).
+            val requested = call.request.queryParameters["model"]
+            if (requested != null) {
+                val model = modelsProvider().firstOrNull { it.id == requested }
+                    ?: return@get call.respond(
+                        HttpStatusCode.NotFound,
+                        LlamaError("model '$requested' is not found"),
+                    )
+                val template = ChatTemplates.forModel(requested)
+                call.respond(
+                    LlamaProps(
+                        defaultGenerationSettings = defaultSettings(engine, modelId),
+                        modelPath = if (requested == modelId) modelPathProvider() else model.absolutePath,
+                        chatTemplate = template?.jinja,
+                        role = "model",
+                        modelAlias = requested,
+                        bosToken = template?.bos,
+                        eosToken = template?.eos,
+                    ),
+                )
+            } else {
+                val template = ChatTemplates.forModel(modelId)
+                call.respond(
+                    LlamaProps(
+                        defaultGenerationSettings = defaultSettings(engine, modelId),
+                        // llama.cpp router reports "none" while nothing is loaded.
+                        modelPath = modelPathProvider() ?: "none",
+                        chatTemplate = template?.jinja,
+                        role = "router",
+                        modelAlias = "llama-server",
+                        maxInstances = 1,
+                        modelsAutoload = true,
+                        bosToken = template?.bos,
+                        eosToken = template?.eos,
+                    ),
+                )
+            }
+        } else {
+            val template = ChatTemplates.forModel(modelId)
+            call.respond(
+                LlamaProps(
+                    defaultGenerationSettings = defaultSettings(engine, modelId),
+                    modelPath = modelPathProvider(),
+                    chatTemplate = template?.jinja,
+                    bosToken = template?.bos,
+                    eosToken = template?.eos,
+                ),
+            )
+        }
     }
 
     get("/slots") {
@@ -177,6 +234,110 @@ fun Route.llamaApiRoutes(
                 ),
             ),
         )
+    }
+
+    // --- Router-mode model management (llama.cpp /models endpoints) ---
+
+    get("/models") {
+        if (unauthorized(call)) {
+            return@get authError(call)
+        }
+        if (!routerModeProvider()) {
+            return@get call.respond(
+                HttpStatusCode.NotFound,
+                LlamaError("router mode is disabled — GET /v1/models lists the loaded model"),
+            )
+        }
+        val loadedId = modelIdProvider()
+        val now = System.currentTimeMillis() / 1000
+        call.respond(
+            ModelListResponse(
+                data = modelsProvider().map { model ->
+                    ModelInfo(
+                        id = model.id,
+                        created = model.lastModified / 1000,
+                        aliases = listOf(model.id),
+                        status = ModelStatus(
+                            value = if (model.id == loadedId) "loaded" else "not loaded",
+                        ),
+                    )
+                },
+            ),
+        )
+    }
+
+    post("/models/load") {
+        if (unauthorized(call)) {
+            return@post authError(call)
+        }
+        if (!routerModeProvider()) {
+            return@post call.respond(
+                HttpStatusCode.NotFound,
+                LlamaError("router mode is disabled — load models in the app"),
+            )
+        }
+        val id = runCatching {
+            call.receive<RouterModelRequest>().model
+        }.getOrNull().orEmpty()
+        if (id.isEmpty()) {
+            return@post call.respond(HttpStatusCode.BadRequest, LlamaError("'model' is required"))
+        }
+        val model = modelsProvider().firstOrNull { it.id == id }
+            ?: return@post call.respond(HttpStatusCode.NotFound, LlamaError("model '$id' is not found"))
+        if (id == modelIdProvider()) {
+            return@post call.respond(
+                HttpStatusCode.BadRequest,
+                LlamaError("model '$id' is already loaded"),
+            )
+        }
+        if (engine.metrics.value.status == EngineStatus.Generating || !inFlight.compareAndSet(false, true)) {
+            return@post call.respond(HttpStatusCode.ServiceUnavailable, LlamaError("Slot busy"))
+        }
+        try {
+            if (!routerLoader(id)) {
+                return@post call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    LlamaError("model '$id' could not be loaded (busy or load failed)"),
+                )
+            }
+            call.respond(mapOf("success" to true))
+        } finally {
+            inFlight.set(false)
+        }
+    }
+
+    post("/models/unload") {
+        if (unauthorized(call)) {
+            return@post authError(call)
+        }
+        if (!routerModeProvider()) {
+            return@post call.respond(
+                HttpStatusCode.NotFound,
+                LlamaError("router mode is disabled — unload models in the app"),
+            )
+        }
+        val id = runCatching {
+            call.receive<RouterModelRequest>().model
+        }.getOrNull().orEmpty()
+        if (id.isEmpty()) {
+            return@post call.respond(HttpStatusCode.BadRequest, LlamaError("'model' is required"))
+        }
+        if (id != modelIdProvider()) {
+            return@post call.respond(
+                HttpStatusCode.BadRequest,
+                LlamaError("model '$id' is not loaded"),
+            )
+        }
+        if (engine.metrics.value.status == EngineStatus.Generating) {
+            return@post call.respond(HttpStatusCode.ServiceUnavailable, LlamaError("Slot busy"))
+        }
+        if (!routerUnloader(id)) {
+            return@post call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                LlamaError("model '$id' could not be unloaded"),
+            )
+        }
+        call.respond(mapOf("success" to true))
     }
 
     post("/tokenize") {
