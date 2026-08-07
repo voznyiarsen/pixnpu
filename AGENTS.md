@@ -121,13 +121,27 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   so the token can change without restarting.
 - Endpoints: `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (JSON or SSE
   `text/event-stream` with `data: [DONE]` terminator, `Cache-Control: no-cache`).
-  Everything else → OpenAI-style 404.
+  **The chat handler is mounted at BOTH `/v1/chat/completions` and `/chat/completions`**:
+  Pi's openai-completions provider sets `baseURL` to the raw server URL (no `/v1`),
+  so the SDK POSTs to `/chat/completions` — with only the `/v1` mount that was a
+  body-less 404. Everything else → OpenAI-style 404.
 - **Stateless per request**: the full `messages` array is flattened into one role-prefixed
   prompt (`System:`/`User:`/`Assistant:`) and generated with `trackHistory=false`, so API
   calls never read from or write to the app chat. `temperature`, `top_p`,
   `max_tokens`/`max_completion_tokens` map to `paramsOverride` in `engine.generate(...)`.
   `n` is accepted only as 1 (else 400, `param:"n"`); unknown params are ignored
   (vLLM/llama.cpp convention); `max_tokens` + `max_completion_tokens` together → 400.
+- **Thinking (Pi sends `thinking_budget_tokens` + `chat_template_kwargs`, NOT
+  `reasoning_effort`)**: a non-negative `thinking_budget_tokens` enables thinking with
+  that budget; `chat_template_kwargs.enable_thinking == "false"` forces it off (Pi's
+  "thinking off" level); negative budget → 400. Maps to `GenerationParams.thinking*` →
+  `ThinkingConfig(enableThinking, thinkingTokenBudget)` passed to
+  `sendMessageAsync`/`sendMessage` (verified in the 0.15.0 AAR). Reasoning text arrives
+  in `Message.channels["thought"]` (gallery's `LlmChatModelHelper` reads the same key);
+  it is **counted** (engine `metrics.thinkingTokens`, chars/4 estimate) but never emitted
+  as reply text, and history stripping (`stripReasoning`) keeps prior turns clean.
+  `usage.completion_tokens_details.reasoning_tokens` reports the count (OpenAI/Gemini
+  style).
 - Streaming: real per-token deltas from `sendMessageAsync` (coroutines 1.11 ABI
   fix — see the critical section above). `stream_options.include_usage` still
   emits a final usage chunk with empty `choices` before `[DONE]`; usage is
@@ -162,21 +176,27 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
     no model → 503.
   - `GET /props` — `default_generation_settings` (engine defaults, `n_ctx` from metrics),
     `total_slots: 1`, `model_path`, `chat_template` + `bos_token`/`eos_token` from
-    `ChatTemplates` (null for unknown families). **Router mode**: no `?model=` →
-    `role: "router"`, `model_alias: "llama-server"`, `model_path: "none"` when nothing
-    is loaded, `max_instances: 1`, `models_autoload: true`; `?model=<id>` → that
-    model's props (404 for unknown ids).
+    `ChatTemplates` (null for unknown families), `modalities` (vision/video/audio from
+    engine metrics), `is_sleeping: false` (mobile engine never sleeps). **Router mode**:
+    no `?model=` → `role: "router"`, `model_alias: "llama-server"`, `model_path: "none"`
+    when nothing is loaded, `max_instances: 1`, `models_autoload: true`; `?model=<id>` →
+    **llama.cpp status semantics** (Pi's extension polls this for load state): 404 unknown
+    id, **503 `{"error":{"code":503,"message":"model is loading"}}`** while that model is
+    being loaded (via `loadingModelIdProvider`, wired to MainViewModel's
+    `_isLoadingModel`), **400 `{"error":{"code":400,"message":"model is not loaded"}}`**
+    for any installed-but-not-loaded model, 200 + props only when resident.
   - `GET /slots` — one slot, `state` "idle"/"processing" from `metrics.status`.
   - **Router mode** (Settings toggle, pref `api_router_enabled`, read per request):
     the server can start with no model loaded and `POST /v1/chat/completions` with
     any installed model id auto-loads it on demand (via `MainViewModel.loadModelForApi`,
     which reuses the UI load path so guards/status/chat-clear stay consistent); the
     busy gate is held across load + generation. `GET /v1/models` and `GET /models`
-    list every installed model with `status: {"value": "loaded"|"not loaded"}` and
-    `owned_by: "llamacpp"`. `POST /models/load` / `POST /models/unload` manage the
-    loaded model (`{"success": true}`; unknown → 404; wrong state → 400). Requests
-    naming a model that isn't installed → 404; load failure → 503 `model_load_failed`;
-    all router endpoints share the Bearer auth.
+    list every installed model with `status: {"value": "loaded"|"not loaded"}`, `owned_by:
+    "llamacpp"` and **`meta.n_ctx` only on the loaded model** (Pi reads it for the
+    context window; absent = client fallback). `POST /models/load` / `POST /models/unload`
+    manage the loaded model (`{"success": true}`; unknown → 404; wrong state → 400).
+    Requests naming a model that isn't installed → 404; load failure → 503
+    `model_load_failed`; all router endpoints share the Bearer auth.
   - `POST /tokenize` and `POST /detokenize` — **always 501**: LiteRT-LM 0.15.0 exposes
     only `Conversation.getTokenCount()` (count, no ids, no detokenizer); 501 beats
     fabricated token ids.
@@ -220,6 +240,17 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   true) falls back to plain text when off. `StreamingText` gained a
   `markdownEnabled` param; parser (`parseBlocks`/`parseInline`) is internal and
   unit-tested (`MarkdownParserTest`).
+- **Tables: GFM alignment colons now honored** — `:---`/`---:`/`:---:` per-column
+  separators map to left/center/right `TextAlign` (`MdBlock.Table.alignments`,
+  `TableAlign` enum). Column widths are **fit-content**: measured with a
+  `TextMeasurer` (remembered per table, header measured SemiBold). When the
+  intrinsic total exceeds the bubble width the table switches to fixed-width
+  columns inside `horizontalScroll` (header + body rows share one scroll state)
+  with a thin always-visible scrollbar strip (thumb = viewport/content ratio,
+  position from `ScrollState.maxValue`) — **foundation 1.9.3 has no Scrollbar
+  composable** (moved to the KMP split artifacts), hence the hand-drawn bar with
+  theme tokens. `Dp.value` is internal in 1.9.x — ratios come from
+  `Dp / Dp → Float` and `ScrollState.maxValue`, never `.value`.
 - **Chat list no longer yanks the viewport during generation**: auto-scroll is
   split into (a) new-message jumps (`messages.size`) and (b) bottom-pinning on
   stream growth only when the user is already at the bottom (`scrollToItem(
@@ -310,6 +341,9 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   bottom (`snapshotFlow` on the last visible index — same pattern as the chat
   list).
 - `AppLog.parseLine` is internal and unit-tested (`AppLogTest`).
+- **App Log rows are tap-to-copy**: tapping a log line copies its full logcat
+  line (timestamp, priority, tag, message) to the clipboard
+  (`LocalClipboardManager`).
 
 ### Input bar key handling
 - `BasicTextField` in `InputBar` uses `Modifier.onPreviewKeyEvent`: on KeyUp of

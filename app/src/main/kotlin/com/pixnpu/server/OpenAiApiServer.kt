@@ -25,6 +25,7 @@ import io.ktor.server.request.receive
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondTextWriter
+import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -115,6 +116,7 @@ class OpenAiApiServer(
         routerModeProvider: () -> Boolean = { false },
         routerLoader: suspend (String) -> Boolean = { false },
         routerUnloader: suspend (String) -> Boolean = { false },
+        loadingModelIdProvider: () -> String? = { null },
     ) {
         synchronized(lifecycleLock) {
             if (server != null) {
@@ -132,6 +134,7 @@ class OpenAiApiServer(
                     routerModeProvider = routerModeProvider,
                     routerLoader = routerLoader,
                     routerUnloader = routerUnloader,
+                    loadingModelIdProvider = loadingModelIdProvider,
                 )
             }
             server = instance
@@ -162,6 +165,8 @@ class OpenAiApiServer(
  * @param routerLoader loads a model by id for a router-mode request; return true
  *        on success. Wired to MainViewModel so UI state stays in sync.
  * @param routerUnloader unloads a model by id (llama.cpp POST /models/unload).
+ * @param loadingModelIdProvider id of the model currently being loaded (null when
+ *        nothing is loading). /props?model= reports 503 for it, like llama.cpp.
  */
 fun Application.openAiApiModule(
     engine: LiteRTLMEngineInterface,
@@ -173,6 +178,7 @@ fun Application.openAiApiModule(
     routerModeProvider: () -> Boolean = { false },
     routerLoader: suspend (String) -> Boolean = { false },
     routerUnloader: suspend (String) -> Boolean = { false },
+    loadingModelIdProvider: () -> String? = { null },
 ) {
     val json = Json {
         ignoreUnknownKeys = true
@@ -199,64 +205,8 @@ fun Application.openAiApiModule(
         return provided != expected
     }
 
-    routing {
-        get("/") {
-            // Advertised as llama.cpp so API-discovery clients recognize the
-            // server; `impl`/`mode` name the actual backend and operating mode.
-            call.respond(
-                ServiceInfo(
-                    mode = if (routerModeProvider()) "router" else "single-model",
-                ),
-            )
-        }
-        get("/health") {
-            // llama.cpp /health: {"status":"ok"}, or error while all slots are busy.
-            val busy = engine.metrics.value.status == EngineStatus.Generating ||
-                inFlight.get()
-            if (busy) {
-                call.respond(
-                    HttpStatusCode.ServiceUnavailable,
-                    buildJsonObject {
-                        put("status", "error")
-                        put("slots_idle", 0)
-                    },
-                )
-            } else {
-                call.respond(buildJsonObject { put("status", "ok") })
-            }
-        }
-
-        get("/v1/models") {
-            if (unauthorized(call)) {
-                return@get call.respond(
-                    HttpStatusCode.Unauthorized,
-                    ApiError(ErrorBody("Incorrect API key provided", code = "invalid_api_key")),
-                )
-            }
-            val router = routerModeProvider()
-            val loadedId = modelIdProvider()
-            val now = System.currentTimeMillis() / 1000
-            val data = if (router) {
-                // Router mode: every installed model, with llama.cpp status.
-                modelsProvider().map { model ->
-                    ModelInfo(
-                        id = model.id,
-                        created = model.lastModified / 1000,
-                        aliases = listOf(model.id),
-                        status = ModelStatus(
-                            value = if (model.id == loadedId) "loaded" else "not loaded",
-                        ),
-                    )
-                }
-            } else {
-                loadedId?.let {
-                    listOf(ModelInfo(id = it, created = now))
-                } ?: emptyList()
-            }
-            call.respond(ModelListResponse(data = data))
-        }
-
-        post("/v1/chat/completions") {
+    fun Route.chatCompletionsRoute(path: String) {
+        post(path) {
             if (unauthorized(call)) {
                 return@post call.respond(
                     HttpStatusCode.Unauthorized,
@@ -305,6 +255,79 @@ fun Application.openAiApiModule(
                 )
             }
         }
+    }
+
+    routing {
+        get("/") {
+            // Advertised as llama.cpp so API-discovery clients recognize the
+            // server; `impl`/`mode` name the actual backend and operating mode.
+            call.respond(
+                ServiceInfo(
+                    mode = if (routerModeProvider()) "router" else "single-model",
+                ),
+            )
+        }
+        get("/health") {
+            // llama.cpp /health: {"status":"ok"}, or error while all slots are busy.
+            val busy = engine.metrics.value.status == EngineStatus.Generating ||
+                inFlight.get()
+            if (busy) {
+                call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    buildJsonObject {
+                        put("status", "error")
+                        put("slots_idle", 0)
+                    },
+                )
+            } else {
+                call.respond(buildJsonObject { put("status", "ok") })
+            }
+        }
+
+        get("/v1/models") {
+            if (unauthorized(call)) {
+                return@get call.respond(
+                    HttpStatusCode.Unauthorized,
+                    ApiError(ErrorBody("Incorrect API key provided", code = "invalid_api_key")),
+                )
+            }
+            val router = routerModeProvider()
+            val loadedId = modelIdProvider()
+            val now = System.currentTimeMillis() / 1000
+            fun modelMeta(id: String): ModelMeta? =
+                if (id == loadedId) {
+                    ModelMeta(nCtx = engine.metrics.value.maxContextTokens.coerceAtLeast(1))
+                } else {
+                    null
+                }
+            val data = if (router) {
+                // Router mode: every installed model, with llama.cpp status.
+                modelsProvider().map { model ->
+                    ModelInfo(
+                        id = model.id,
+                        created = model.lastModified / 1000,
+                        aliases = listOf(model.id),
+                        status = ModelStatus(
+                            value = if (model.id == loadedId) "loaded" else "not loaded",
+                        ),
+                        meta = modelMeta(model.id),
+                    )
+                }
+            } else {
+                loadedId?.let {
+                    listOf(ModelInfo(id = it, created = now, meta = modelMeta(it)))
+                } ?: emptyList()
+            }
+            call.respond(ModelListResponse(data = data))
+        }
+
+        // The OpenAI-compatible chat route is mounted at BOTH /v1/chat/completions
+        // (the standard OpenAI path) and /chat/completions (root): API clients
+        // configured with a bare base URL — e.g. Pi's openai-completions provider,
+        // whose OpenAI SDK appends /chat/completions to the server URL as given,
+        // without a /v1 segment — still reach the same handler.
+        chatCompletionsRoute("/v1/chat/completions")
+        chatCompletionsRoute("/chat/completions")
 
         // llama.cpp server-compatible endpoints share the same engine and the
         // same single-generation busy gate as the OpenAI API above.
@@ -319,6 +342,7 @@ fun Application.openAiApiModule(
             routerModeProvider = routerModeProvider,
             routerLoader = routerLoader,
             routerUnloader = routerUnloader,
+            loadingModelIdProvider = loadingModelIdProvider,
         )
     }
 }
@@ -394,6 +418,7 @@ private suspend fun handleChatCompletion(
                 includeUsage,
                 processor,
                 flow,
+                thinkingTokens = engine.metrics.value.thinkingTokens,
             )
         } else {
             val reply = buildString { flow.collect { append(it) } }
@@ -403,7 +428,11 @@ private suspend fun handleChatCompletion(
                     created = created,
                     model = modelName,
                     choices = listOf(Choice(message = ResponseMessage(content = reply))),
-                    usage = processor.estimateUsage(promptText, reply),
+                    usage = processor.estimateUsage(
+                        promptText,
+                        reply,
+                        thinkingTokens = engine.metrics.value.thinkingTokens,
+                    ),
                 ),
             )
         }
@@ -422,6 +451,7 @@ private suspend fun streamCompletion(
     includeUsage: Boolean,
     processor: ChatCompletionsProcessor,
     flow: Flow<String>,
+    thinkingTokens: Int,
 ) {
     fun chunk(delta: ChunkDelta, finish: String?, usage: Usage? = null): String =
         json.encodeToString(ChatCompletionChunk.serializer(), ChatCompletionChunk(
@@ -464,7 +494,13 @@ private suspend fun streamCompletion(
         }
         writeSse(chunk(ChunkDelta(), "stop"))
         if (includeUsage) {
-            writeSse(chunk(ChunkDelta(), null, usage = processor.estimateUsage(promptText, reply.toString())))
+            writeSse(
+                chunk(
+                    ChunkDelta(),
+                    null,
+                    usage = processor.estimateUsage(promptText, reply.toString(), thinkingTokens),
+                ),
+            )
         }
         writeSse("[DONE]")
         flush()

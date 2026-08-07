@@ -116,6 +116,35 @@ data class LlamaProps(
     /** Jinja template of the loaded model (llama.cpp GGUF chat_template). */
     @SerialName("bos_token") val bosToken: String? = null,
     @SerialName("eos_token") val eosToken: String? = null,
+    /** Modality capabilities of the loaded model (llama.cpp /props?model=). */
+    val modalities: LlamaModalities? = null,
+    /** Whether the model is in its low-power state (never on mobile engines). */
+    @SerialName("is_sleeping") val isSleeping: Boolean = false,
+)
+
+@Serializable
+data class LlamaModalities(
+    val vision: Boolean = false,
+    val video: Boolean = false,
+    val audio: Boolean = false,
+)
+
+/**
+ * llama.cpp error body for /props?model=<id> of a model that is not resident:
+ * `{"error": {"code": 400, "message": "model is not loaded", ...}}`. Clients
+ * (e.g. Pi's llama.cpp extension) map code 400 + that exact message to
+ * "unloaded", 503 to "loading", 401 to "unauthorized".
+ */
+@Serializable
+data class LlamaPropsError(
+    val code: Int,
+    val message: String,
+    val type: String = "invalid_request_error",
+)
+
+@Serializable
+data class LlamaPropsErrorBody(
+    val error: LlamaPropsError,
 )
 
 @Serializable

@@ -3,15 +3,20 @@ package com.pixnpu.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -21,16 +26,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -128,80 +140,174 @@ fun MarkdownBody(
 @Composable
 private fun TableBlock(block: MdBlock.Table, bodyStyle: TextStyle) {
     val borderColor = MaterialTheme.colorScheme.outlineVariant
-    // Weights are O(cells) recursive text scans — recompute only per table, not
-    // per recomposition of the streaming message.
-    val columnWidths = remember(block) { tableColumnWeights(block) }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(8.dp)),
-    ) {
-        TableRowRow(
-            cells = block.header,
-            columns = block.columns,
-            columnWidths = columnWidths,
-            header = true,
-            bodyStyle = bodyStyle,
-        )
-        block.rows.forEachIndexed { rowIndex, row ->
-            if (rowIndex == 0) {
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    // Intrinsic column widths in px, measured once per table (not per
+    // recomposition of the streaming message). Header cells are measured bold
+    // since the header renders SemiBold.
+    val columnWidthsPx = remember(block, bodyStyle, density.fontScale) {
+        val headerStyle = bodyStyle.copy(fontWeight = FontWeight.SemiBold)
+        List(block.columns) { col ->
+            var maxPx = 0
+            block.header.getOrNull(col)?.let { maxPx = maxOf(maxPx, measurePx(textMeasurer, it, headerStyle)) }
+            block.rows.forEach { row ->
+                row.getOrNull(col)?.let { maxPx = maxOf(maxPx, measurePx(textMeasurer, it, bodyStyle)) }
+            }
+            maxPx
+        }
+    }
+    val columnWidths = columnWidthsPx.map { px -> with(density) { px.toDp() + CELL_PADDING_X * 2 } }
+    val totalWidth = columnWidths.fold(0.dp) { acc, w -> acc + w }
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        // Local capture: nested lambda scopes (Column content) cannot resolve
+        // the BoxWithConstraintsScope receiver implicitly.
+        val boxMaxWidth = maxWidth
+        val overflow = totalWidth > boxMaxWidth
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .border(BorderStroke(1.dp, borderColor), RoundedCornerShape(8.dp)),
+        ) {
+            if (overflow) {
+                // Fit-content widths + horizontal scroll: the table keeps its
+                // intrinsic column sizes instead of squashing every column to
+                // fit the bubble; a thin scrollbar strip shows the position.
+                val scrollState = rememberScrollState()
+                // Dp / Dp yields a Float ratio (public operator); ScrollState
+                // reports its own maxValue, avoiding Dp.value (internal).
+                val thumbFraction = (boxMaxWidth / totalWidth).coerceIn(0.1f, 1f)
+                val thumbWidth = (boxMaxWidth * thumbFraction).coerceAtLeast(MIN_THUMB_WIDTH)
+                val scrollFraction = if (scrollState.maxValue > 0) {
+                    scrollState.value.toFloat() / scrollState.maxValue
+                } else {
+                    0f
+                }
+                Row(modifier = Modifier.horizontalScroll(scrollState)) {
+                    TableRowRow(
+                        cells = block.header,
+                        columns = block.columns,
+                        alignments = block.alignments,
+                        columnWidths = columnWidths,
+                        fixed = true,
+                        header = true,
+                        bodyStyle = bodyStyle,
+                    )
+                }
+                block.rows.forEachIndexed { rowIndex, row ->
+                    if (rowIndex == 0) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(borderColor),
+                        )
+                    }
+                    Row(modifier = Modifier.horizontalScroll(scrollState)) {
+                        TableRowRow(
+                            cells = row,
+                            columns = block.columns,
+                            alignments = block.alignments,
+                            columnWidths = columnWidths,
+                            fixed = true,
+                            header = false,
+                            bodyStyle = bodyStyle,
+                        )
+                    }
+                }
+                // Thin always-visible scrollbar (foundation 1.9.3 has no
+                // Scrollbar composable — it moved to the KMP split artifacts).
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(1.dp)
-                        .background(borderColor),
+                        .padding(top = 4.dp)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .offset(x = (boxMaxWidth - thumbWidth) * scrollFraction)
+                            .width(thumbWidth)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(MaterialTheme.colorScheme.outline),
+                    )
+                }
+            } else {
+                // Fits: proportional widths (intrinsic sizes stretched to fill),
+                // alignment still applies where a column is wider than its text.
+                TableRowRow(
+                    cells = block.header,
+                    columns = block.columns,
+                    alignments = block.alignments,
+                    columnWidths = columnWidths,
+                    fixed = false,
+                    header = true,
+                    bodyStyle = bodyStyle,
                 )
+                block.rows.forEachIndexed { rowIndex, row ->
+                    if (rowIndex == 0) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(borderColor),
+                        )
+                    }
+                    TableRowRow(
+                        cells = row,
+                        columns = block.columns,
+                        alignments = block.alignments,
+                        columnWidths = columnWidths,
+                        fixed = false,
+                        header = false,
+                        bodyStyle = bodyStyle,
+                    )
+                }
             }
-            TableRowRow(
-                cells = row,
-                columns = block.columns,
-                columnWidths = columnWidths,
-                header = false,
-                bodyStyle = bodyStyle,
-            )
         }
     }
 }
 
-/**
- * Column widths are proportional to the header's cell text lengths (longest
- * run wins), so narrow columns like "Q" don't eat half the table. Zero-length
- * cells get a minimum weight.
- */
-private fun tableColumnWeights(block: MdBlock.Table): List<Float> {
-    fun cellLen(cell: List<MdSpan>): Int = cell.sumOf { span ->
-        when (span) {
-            is MdSpan.Text -> span.text.length
-            is MdSpan.Bold -> cellLen(span.children)
-            is MdSpan.Italic -> cellLen(span.children)
-            is MdSpan.InlineCode -> span.text.length
-            is MdSpan.Link -> cellLen(span.text)
-        }
-    }
-    return List(block.columns) { col ->
-        val headerLen = block.header.getOrNull(col)?.let { cellLen(it) } ?: 0
-        val maxRowLen = block.rows.maxOfOrNull { row ->
-            row.getOrNull(col)?.let { cellLen(it) } ?: 0
-        } ?: 0
-        (maxOf(headerLen, maxRowLen) + 2).coerceAtLeast(1).toFloat()
-    }
+private fun measurePx(textMeasurer: TextMeasurer, spans: List<MdSpan>, style: TextStyle): Int =
+    textMeasurer
+        .measure(spanString(spans), style = style, constraints = Constraints(maxWidth = Int.MAX_VALUE))
+        .size
+        .width
+
+/** The spans as an AnnotatedString with layout-neutral colors (measure only). */
+private fun spanString(spans: List<MdSpan>): AnnotatedString = buildAnnotatedString {
+    appendSpans(spans, Color.Unspecified, Color.Unspecified, Color.Unspecified)
 }
 
 @Composable
 private fun TableRowRow(
     cells: List<List<MdSpan>>,
     columns: Int,
-    columnWidths: List<Float>,
+    alignments: List<TableAlign>,
+    columnWidths: List<Dp>,
+    fixed: Boolean,
     header: Boolean,
     bodyStyle: TextStyle,
 ) {
     Row(modifier = Modifier.fillMaxWidth()) {
         for (col in 0 until columns) {
             val cell: List<MdSpan> = cells.getOrNull(col) ?: emptyList()
+            val alignment = when (alignments.getOrNull(col) ?: TableAlign.Left) {
+                TableAlign.Left -> TextAlign.Start
+                TableAlign.Center -> TextAlign.Center
+                TableAlign.Right -> TextAlign.End
+            }
+            val cellModifier = if (fixed) {
+                Modifier.width(columnWidths[col])
+            } else {
+                Modifier.weight(columnWidths[col].value)
+            }
             Text(
                 text = renderSpans(cell),
+                textAlign = alignment,
                 style = if (header) {
                     bodyStyle.copy(
                         fontWeight = FontWeight.SemiBold,
@@ -210,9 +316,10 @@ private fun TableRowRow(
                 } else {
                     bodyStyle.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                 },
-                modifier = Modifier
-                    .weight(columnWidths[col])
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                modifier = cellModifier.padding(
+                    horizontal = CELL_PADDING_X,
+                    vertical = CELL_PADDING_Y,
+                ),
             )
         }
     }
@@ -282,9 +389,14 @@ internal sealed class MdBlock {
         val columns: Int,
         val header: List<List<MdSpan>>,
         val rows: List<List<List<MdSpan>>>,
+        /** Per-column alignment from the separator row's colons (GFM). */
+        val alignments: List<TableAlign> = emptyList(),
     ) : MdBlock()
     data object Rule : MdBlock()
 }
+
+/** GFM table column alignment, derived from `:--:` style separator cells. */
+internal enum class TableAlign { Left, Center, Right }
 
 internal sealed class MdSpan {
     data class Text(val text: String) : MdSpan()
@@ -301,6 +413,15 @@ private val BULLET_ITEM_REGEX = Regex("^[-*+]\\s+(.*)$")
 private val TABLE_SEPARATOR_REGEX =
     Regex("^\\|?\\s*:?-{1,}:?\\s*(\\|\\s*:?-{1,}:?\\s*)+\\|?$")
 
+/** Horizontal cell padding (each side) added to the measured column widths. */
+private val CELL_PADDING_X = 8.dp
+
+/** Vertical cell padding, matching the previous table look. */
+private val CELL_PADDING_Y = 6.dp
+
+/** Smallest rendered scrollbar thumb, so a huge table keeps a grippable bar. */
+private val MIN_THUMB_WIDTH = 24.dp
+
 /**
  * A GFM-style table: a header row of `|`-separated cells (leading/trailing
  * pipes optional), a separator row of `---` cells (with optional alignment
@@ -313,6 +434,21 @@ private fun isTableSeparator(line: String): Boolean =
 
 private fun parseTableRow(line: String): List<String> =
     line.trim().trim('|').split('|').map { it.trim() }
+
+/**
+ * GFM separator row alignment: `:---` = left, `---:` = right, `:---:` = center;
+ * a bare `---` cell is left-aligned by default.
+ */
+private fun parseTableAlignments(separator: String): List<TableAlign> =
+    parseTableRow(separator).map { cell ->
+        val left = cell.startsWith(":")
+        val right = cell.endsWith(":")
+        when {
+            left && right -> TableAlign.Center
+            right -> TableAlign.Right
+            else -> TableAlign.Left
+        }
+    }
 
 internal fun parseBlocks(text: String): List<MdBlock> {
     val lines = text.lines()
@@ -358,6 +494,7 @@ internal fun parseBlocks(text: String): List<MdBlock> {
 
             trimmed.contains("|") && i + 1 < lines.size && isTableSeparator(lines[i + 1]) -> {
                 val header = parseTableRow(lines[i])
+                val alignments = parseTableAlignments(lines[i + 1])
                 i += 2 // header + separator
                 val rows = mutableListOf<List<List<MdSpan>>>()
                 while (i < lines.size) {
@@ -371,6 +508,7 @@ internal fun parseBlocks(text: String): List<MdBlock> {
                         columns = header.size,
                         header = header.map { parseInline(it) },
                         rows = rows,
+                        alignments = alignments,
                     ),
                 )
             }

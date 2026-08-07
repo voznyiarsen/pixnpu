@@ -8,7 +8,10 @@ import io.mockk.mockk
 import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -242,6 +245,39 @@ class ChatCompletionsProcessorTest {
         assertEquals("top_p", e.param)
     }
 
+    // --- thinking (Pi sends thinking_budget_tokens + chat_template_kwargs) ---
+
+    @Test
+    fun `thinking budget enables thinking with that budget`() {
+        val params = processor.effectiveParams(ChatCompletionRequest(thinkingBudgetTokens = 1024))
+        assertTrue(params.thinkingEnabled)
+        assertEquals(1024, params.thinkingTokenBudget)
+    }
+
+    @Test
+    fun `thinking stays off without thinking params`() {
+        val params = processor.effectiveParams(ChatCompletionRequest())
+        assertFalse(params.thinkingEnabled)
+        assertEquals(-1, params.thinkingTokenBudget)
+    }
+
+    @Test
+    fun `enable_thinking false overrides budget`() {
+        val kwargs = buildJsonObject { put("enable_thinking", JsonPrimitive("false")) }
+        val params = processor.effectiveParams(
+            ChatCompletionRequest(thinkingBudgetTokens = 512, chatTemplateKwargs = kwargs),
+        )
+        assertFalse(params.thinkingEnabled)
+    }
+
+    @Test
+    fun `negative thinking budget throws BadRequest`() {
+        val e = assertThrows(ChatCompletionError.BadRequest::class.java) {
+            processor.effectiveParams(ChatCompletionRequest(thinkingBudgetTokens = -1))
+        }
+        assertEquals("thinking_budget_tokens", e.param)
+    }
+
     // --- estimateUsage ---
 
     @Test
@@ -250,5 +286,12 @@ class ChatCompletionsProcessorTest {
         assertEquals(1, usage.promptTokens)
         assertEquals(0, usage.completionTokens)
         assertEquals(1, usage.totalTokens)
+    }
+
+    @Test
+    fun `usage reports reasoning tokens in completion details`() {
+        val usage = processor.estimateUsage("aaaa", "bbbb", thinkingTokens = 8)
+        assertEquals(8, usage.completionTokensDetails?.reasoningTokens)
+        assertEquals(1 + 1 + 8, usage.totalTokens)
     }
 }

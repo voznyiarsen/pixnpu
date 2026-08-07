@@ -120,6 +120,21 @@ class MarkdownParserTest {
         val table = blocks[0] as MdBlock.Table
         assertEquals(2, table.columns)
         assertEquals(1, table.rows.size)
+        assertEquals(listOf(TableAlign.Center, TableAlign.Right), table.alignments)
+    }
+
+    @Test
+    fun table_alignment_defaults_to_left() {
+        val blocks = parseBlocks("| A | B |\n|:--|---|\n| 1 | 2 |")
+        val table = blocks[0] as MdBlock.Table
+        assertEquals(listOf(TableAlign.Left, TableAlign.Left), table.alignments)
+    }
+
+    @Test
+    fun table_single_dash_alignment_cells() {
+        val blocks = parseBlocks("| A | B |\n|:-:|:-:|\n| 1 | 2 |")
+        val table = blocks[0] as MdBlock.Table
+        assertEquals(listOf(TableAlign.Center, TableAlign.Center), table.alignments)
     }
 
     @Test

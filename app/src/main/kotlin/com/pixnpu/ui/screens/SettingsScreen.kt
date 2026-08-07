@@ -1,6 +1,7 @@
 package com.pixnpu.ui.screens
 
 import android.os.Process
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -726,13 +729,18 @@ private fun LogEntryRow(entry: AppLog.Entry) {
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val time = SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(entry.timeMs)
+    val line = "$time ${entry.priority} ${entry.tag}: ${entry.message}"
+    val clipboard = LocalClipboardManager.current
     Text(
-        text = "$time ${entry.priority} ${entry.tag}: ${entry.message}",
+        text = line,
         style = MaterialTheme.typography.labelSmall.copy(
             fontFamily = FontFamily.Monospace,
             color = color,
         ),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            // Tap copies the entry's full logcat line to the clipboard.
+            .clickable { clipboard.setText(AnnotatedString(line)) },
     )
 }
 

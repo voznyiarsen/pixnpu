@@ -21,4 +21,6 @@ data class InferenceMetrics(
     val supportsVision: Boolean = false,
     val supportsAudio: Boolean = false,
     val supportsVideo: Boolean = false,
+    /** Estimated reasoning (thinking-channel) tokens of the last generation. */
+    val thinkingTokens: Int = 0,
 )

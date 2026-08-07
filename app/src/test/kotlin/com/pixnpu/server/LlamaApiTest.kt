@@ -85,6 +85,7 @@ class LlamaApiTest {
         routerMode: Boolean = false,
         routerLoader: suspend (String) -> Boolean = { true },
         routerUnloader: suspend (String) -> Boolean = { true },
+        loadingModelId: String? = null,
         block: suspend io.ktor.client.HttpClient.() -> Unit,
     ) {
         val context = mockk<Context>(relaxed = true)
@@ -100,6 +101,7 @@ class LlamaApiTest {
                     routerModeProvider = { routerMode },
                     routerLoader = routerLoader,
                     routerUnloader = routerUnloader,
+                    loadingModelIdProvider = { loadingModelId },
                 )
             }
             val client = createClient { }
@@ -292,7 +294,7 @@ class LlamaApiTest {
 
     @Test
     fun `props with model param reports that model's path and template`() =
-        testServer(FakeEngine(), models = routerModels, routerMode = true) {
+        testServer(FakeEngine().apply { modelId = "llama3-2" }, models = routerModels, routerMode = true) {
             val response = get("/props?model=llama3-2")
             assertEquals(HttpStatusCode.OK, response.status)
             val body = json.decodeFromString<LlamaProps>(response.bodyAsText())
@@ -300,6 +302,42 @@ class LlamaApiTest {
             assertEquals("llama3-2", body.modelAlias)
             assertNotNull(body.chatTemplate)
             assertTrue(body.chatTemplate!!.contains("start_header_id"))
+        }
+
+    @Test
+    fun `props with unloaded model returns 400 model is not loaded`() =
+        testServer(FakeEngine(), models = routerModels, routerMode = true) {
+            val response = get("/props?model=llama3-2")
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            val body = json.decodeFromString<LlamaPropsErrorBody>(response.bodyAsText())
+            assertEquals(400, body.error.code)
+            assertEquals("model is not loaded", body.error.message)
+        }
+
+    @Test
+    fun `props with loading model returns 503 model is loading`() =
+        testServer(
+            FakeEngine(),
+            models = routerModels,
+            routerMode = true,
+            loadingModelId = "llama3-2",
+        ) {
+            val response = get("/props?model=llama3-2")
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            val body = json.decodeFromString<LlamaPropsErrorBody>(response.bodyAsText())
+            assertEquals(503, body.error.code)
+            assertEquals("model is loading", body.error.message)
+        }
+
+    @Test
+    fun `props for loaded model reports modalities and not sleeping`() =
+        testServer(FakeEngine().apply { modelId = "gemma3-270m-it-q8" }, models = routerModels, routerMode = true) {
+            val response = get("/props?model=gemma3-270m-it-q8")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<LlamaProps>(response.bodyAsText())
+            assertNotNull(body.modalities)
+            assertFalse(body.isSleeping)
+            assertEquals("model", body.role)
         }
 
     @Test
@@ -325,6 +363,10 @@ class LlamaApiTest {
             assertEquals(2, body.data.size)
             assertEquals("loaded", body.data[0].status?.value)
             assertEquals("not loaded", body.data[1].status?.value)
+            // meta.n_ctx is only reported for the loaded model (Pi uses it for
+            // the context window; a wrong value would break context sizing).
+            assertEquals(8192, body.data[0].meta?.nCtx)
+            assertEquals(null, body.data[1].meta)
         }
 
     @Test

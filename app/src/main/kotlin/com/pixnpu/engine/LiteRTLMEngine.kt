@@ -10,6 +10,7 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -285,10 +286,23 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                   // coroutines channel. Requires coroutines 1.11+ (see AGENTS.md —
                   // the SendChannel.close$default ABI this bytecode needs is absent
                   // in 1.9.0, which killed the process).
-                  newConversation.sendMessageAsync(fullPrompt).collect { message ->
+                  // Thinking models (Gemma 3+/4) stream their reasoning through the
+                  // "thought" channel instead of Content.Text; it is counted for
+                  // usage (metrics.thinkingTokens) but not emitted as reply text.
+                  var thinkingSeen = 0
+                  newConversation.sendMessageAsync(
+                      fullPrompt,
+                      thinkingConfig = ThinkingConfig(
+                          enableThinking = state.params.thinkingEnabled,
+                          thinkingTokenBudget = state.params.thinkingTokenBudget,
+                      ),
+                  ).collect { message ->
                       val tokenText = message.contents.contents
                           .filterIsInstance<Content.Text>()
                           .joinToString("") { it.text }
+                      message.channels["thought"]?.let { thinking ->
+                          if (thinking.length > thinkingSeen) thinkingSeen = thinking.length
+                      }
                       if (tokenText.isEmpty()) return@collect
                       fullReply.append(tokenText)
                       streamedTokens++
@@ -302,6 +316,13 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                       }
                       emit(tokenText)
                   }
+                  if (thinkingSeen > 0) {
+                      mutex.withLock {
+                          _metrics.value = _metrics.value.copy(
+                              thinkingTokens = estimateChars(fullReply.length + thinkingSeen) - estimateChars(fullReply.length),
+                          )
+                      }
+                  }
               } catch (e: CancellationException) {
                   // Cancelled mid-stream: propagate without running the sync
                   // fallback — regenerating the reply after the user hit stop
@@ -312,8 +333,25 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                   // (the pre-1.11 workaround). Runs on IO: sendMessage is a
                   // blocking native call that can take the full reply duration.
                   Log.w("LiteRTLMEngine", "Native streaming failed, falling back to sync generation", e)
-                  val reply = withContext(Dispatchers.IO) {
-                      newConversation.sendMessage(fullPrompt).toString()
+                  val replyMessage = withContext(Dispatchers.IO) {
+                      newConversation.sendMessage(
+                          fullPrompt,
+                          thinkingConfig = ThinkingConfig(
+                              enableThinking = state.params.thinkingEnabled,
+                              thinkingTokenBudget = state.params.thinkingTokenBudget,
+                          ),
+                      )
+                  }
+                  // Text only — the thinking channel stays out of the visible reply.
+                  val reply = replyMessage.contents.contents
+                      .filterIsInstance<Content.Text>()
+                      .joinToString("")
+                  replyMessage.channels["thought"]?.let { thinking ->
+                      mutex.withLock {
+                          _metrics.value = _metrics.value.copy(
+                              thinkingTokens = estimateChars(fullReply.length + thinking.length) - estimateChars(fullReply.length),
+                          )
+                      }
                   }
                   fullReply.append(reply)
                   if (reply.isNotEmpty()) {
@@ -646,4 +684,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
         if (chars.isEmpty()) return 0
         return (chars.length / 4).coerceAtLeast(1)
     }
+
+    /** Char-count token estimate for already-counted text (thinking channel). */
+    private fun estimateChars(count: Int): Int = if (count <= 0) 0 else (count / 4).coerceAtLeast(1)
 }

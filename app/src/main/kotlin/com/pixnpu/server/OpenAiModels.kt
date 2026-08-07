@@ -22,6 +22,17 @@ data class ChatCompletionRequest(
     val n: Int = 1,
     val stream: Boolean = false,
     @SerialName("stream_options") val streamOptions: StreamOptions? = null,
+    /**
+     * Thinking budget in tokens (llama.cpp / Pi convention): -1 = enabled with
+     * infinite budget, >0 = enabled with that budget, 0 = disabled.
+     */
+    @SerialName("thinking_budget_tokens") val thinkingBudgetTokens: Int? = null,
+    /**
+     * Template kwargs (Pi sends {"enable_thinking": false} for its "off" level).
+     */
+    @SerialName("chat_template_kwargs") val chatTemplateKwargs: JsonObject? = null,
+    /** OpenAI reasoning effort levels, mapped to token budgets. */
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
 )
 
 @Serializable
@@ -58,6 +69,13 @@ data class Usage(
     @SerialName("prompt_tokens") val promptTokens: Int = 0,
     @SerialName("completion_tokens") val completionTokens: Int = 0,
     @SerialName("total_tokens") val totalTokens: Int = 0,
+    @SerialName("completion_tokens_details") val completionTokensDetails: CompletionTokensDetails? = null,
+)
+
+/** OpenAI usage breakdown; reasoning_tokens = estimated thinking-channel tokens. */
+@Serializable
+data class CompletionTokensDetails(
+    @SerialName("reasoning_tokens") val reasoningTokens: Int = 0,
 )
 
 @Serializable
@@ -106,6 +124,17 @@ data class ModelInfo(
     val tags: List<String> = emptyList(),
     /** Router-mode status ("loaded" / "not loaded"), absent in single-model mode. */
     val status: ModelStatus? = null,
+    /**
+     * Model metadata for the currently loaded model (llama.cpp /models `meta`).
+     * Only the resident model reports n_ctx; others omit it and clients fall
+     * back to their defaults.
+     */
+    val meta: ModelMeta? = null,
+)
+
+@Serializable
+data class ModelMeta(
+    @SerialName("n_ctx") val nCtx: Int,
 )
 
 /** llama.cpp router /v1/models + /models status object. */

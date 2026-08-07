@@ -45,7 +45,7 @@ class OpenAiApiServerTest {
         var lastParamsOverride: GenerationParams? = null
         val generatedContents = mutableListOf<List<Content>>()
 
-        private val _metrics = MutableStateFlow(InferenceMetrics(status = status))
+        private val _metrics = MutableStateFlow(InferenceMetrics(status = status, maxContextTokens = 8192))
         override val metrics: StateFlow<InferenceMetrics> = _metrics.asStateFlow()
 
         override val isLoaded: Boolean get() = loaded
@@ -114,6 +114,16 @@ class OpenAiApiServerTest {
         assertEquals("gemma3-270m-it-q8", body.data[0].id)
         assertEquals("model", body.data[0].obj)
     }
+
+    @Test
+    fun `models list reports meta context window for the loaded model`() =
+        testServer(FakeEngine().apply { modelId = "gemma3-270m-it-q8" }) {
+            val response = get("/v1/models")
+            val body = json.decodeFromString<ModelListResponse>(response.bodyAsText())
+            // Pi reads meta.n_ctx for its context-window fallback (128000);
+            // the engine's actual context must win for loaded models.
+            assertEquals(8192, body.data[0].meta?.nCtx)
+        }
 
     @Test
     fun `models list is empty when nothing is loaded`() = testServer(FakeEngine()) {
@@ -474,4 +484,45 @@ class OpenAiApiServerTest {
         val response = get("/v1/embeddings")
         assertEquals(HttpStatusCode.NotFound, response.status)
     }
+
+    // --- root /chat/completions (Pi llama.cpp extension) ---
+
+    @Test
+    fun `root chat completions route works without v1 prefix`() =
+        testServer(FakeEngine().apply { modelId = "m" }) {
+            // Pi's openai-completions provider sets baseURL to the server URL
+            // without /v1, so the SDK posts to POST /chat/completions — this
+            // was a 404 (empty body) before the dual mount.
+            val response = post("/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"m","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<ChatCompletionResponse>(response.bodyAsText())
+            assertEquals("m", body.model)
+            assertTrue(body.choices[0].message.content == "Hello world")
+        }
+
+    @Test
+    fun `root chat completions requires auth like the v1 route`() =
+        testServer(FakeEngine().apply { modelId = "m" }, token = "secret") {
+            val response = post("/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"m","messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.Unauthorized, response.status)
+        }
+
+    @Test
+    fun `root chat completions streams like the v1 route`() =
+        testServer(FakeEngine().apply { modelId = "m" }, routerLoader = { true }) {
+            val response = post("/chat/completions") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"model":"m","stream":true,"messages":[{"role":"user","content":"Hi"}]}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val text = response.bodyAsText()
+            assertTrue(text.contains("data: [DONE]"))
+            assertTrue(text.contains("""{"role":"assistant"""") || text.contains("\"content\""))
+        }
 }

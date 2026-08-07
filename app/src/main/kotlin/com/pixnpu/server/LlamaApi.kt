@@ -65,6 +65,7 @@ fun Route.llamaApiRoutes(
     routerModeProvider: () -> Boolean = { false },
     routerLoader: suspend (String) -> Boolean = { false },
     routerUnloader: suspend (String) -> Boolean = { false },
+    loadingModelIdProvider: () -> String? = { null },
 ) {
     fun unauthorized(call: ApplicationCall): Boolean {
         val expected = tokenProvider()
@@ -163,7 +164,9 @@ fun Route.llamaApiRoutes(
         if (router) {
             // Router-mode /props: no ?model= -> the router itself (llama.cpp
             // returns role "router" + model_path "none"); ?model=<id> -> that
-            // model's props (the loaded model's settings when it's resident).
+            // model's props, or a llama.cpp-style error when it isn't resident
+            // (400 "model is not loaded" / 503 while loading) — Pi's llama.cpp
+            // extension maps exactly these codes to its unloaded/loading states.
             val requested = call.request.queryParameters["model"]
             if (requested != null) {
                 val model = modelsProvider().firstOrNull { it.id == requested }
@@ -171,16 +174,31 @@ fun Route.llamaApiRoutes(
                         HttpStatusCode.NotFound,
                         LlamaError("model '$requested' is not found"),
                     )
+                if (requested == loadingModelIdProvider()) {
+                    return@get call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        LlamaPropsErrorBody(LlamaPropsError(503, "model is loading")),
+                    )
+                }
+                if (requested != modelId) {
+                    return@get call.respond(
+                        HttpStatusCode.BadRequest,
+                        LlamaPropsErrorBody(
+                            LlamaPropsError(400, "model is not loaded", "invalid_request_error"),
+                        ),
+                    )
+                }
                 val template = ChatTemplates.forModel(requested)
                 call.respond(
                     LlamaProps(
                         defaultGenerationSettings = defaultSettings(engine, modelId),
-                        modelPath = if (requested == modelId) modelPathProvider() else model.absolutePath,
+                        modelPath = modelPathProvider() ?: model.absolutePath,
                         chatTemplate = template?.jinja,
                         role = "model",
                         modelAlias = requested,
                         bosToken = template?.bos,
                         eosToken = template?.eos,
+                        modalities = engineModalities(engine),
                     ),
                 )
             } else {
@@ -209,6 +227,7 @@ fun Route.llamaApiRoutes(
                     chatTemplate = template?.jinja,
                     bosToken = template?.bos,
                     eosToken = template?.eos,
+                    modalities = engineModalities(engine),
                 ),
             )
         }
@@ -249,7 +268,6 @@ fun Route.llamaApiRoutes(
             )
         }
         val loadedId = modelIdProvider()
-        val now = System.currentTimeMillis() / 1000
         call.respond(
             ModelListResponse(
                 data = modelsProvider().map { model ->
@@ -260,6 +278,11 @@ fun Route.llamaApiRoutes(
                         status = ModelStatus(
                             value = if (model.id == loadedId) "loaded" else "not loaded",
                         ),
+                        meta = if (model.id == loadedId) {
+                            ModelMeta(nCtx = engine.metrics.value.maxContextTokens.coerceAtLeast(1))
+                        } else {
+                            null
+                        },
                     )
                 },
             ),
@@ -365,6 +388,16 @@ fun Route.llamaApiRoutes(
             LlamaError("Not implemented: the LiteRT-LM backend has no detokenizer API"),
         )
     }
+}
+
+/** Modality capabilities reported by /props for the loaded model. */
+private fun engineModalities(engine: LiteRTLMEngineInterface): LlamaModalities? {
+    val metrics = engine.metrics.value
+    return LlamaModalities(
+        vision = metrics.supportsVision,
+        video = metrics.supportsVideo,
+        audio = metrics.supportsAudio,
+    )
 }
 
 private fun promptText(prompt: JsonElement?): String? {

@@ -276,23 +276,47 @@ class ChatCompletionsProcessor(private val context: Context) {
                 "n",
             )
         }
+        val thinkingEnabled = request.thinkingBudgetTokens
+        if (thinkingEnabled != null && thinkingEnabled < 0) {
+            throw ChatCompletionError.BadRequest(
+                "'thinking_budget_tokens' must be non-negative",
+                "thinking_budget_tokens",
+            )
+        }
+        val thinkingBudget = request.chatTemplateKwargs?.get("enable_thinking")
+            ?.jsonPrimitive?.contentOrNull
+            ?: return GenerationParams(
+                temperature = temperature?.toFloat() ?: GenerationParams().temperature,
+                topP = topP?.toFloat() ?: GenerationParams().topP,
+                maxTokens = (maxTokens ?: maxCompletionTokens) ?: GenerationParams().maxTokens,
+                thinkingEnabled = thinkingEnabled != null,
+                thinkingTokenBudget = thinkingEnabled ?: -1,
+            )
+        // chat_template_kwargs.enable_thinking is an explicit off-switch used by
+        // Pi's llama.cpp extension for its "thinking off" level; treat a
+        // literal "false" as off even when a budget was passed.
         return GenerationParams(
             temperature = temperature?.toFloat() ?: GenerationParams().temperature,
             topP = topP?.toFloat() ?: GenerationParams().topP,
             maxTokens = (maxTokens ?: maxCompletionTokens) ?: GenerationParams().maxTokens,
+            thinkingEnabled = thinkingEnabled != null && thinkingBudget != "false",
+            thinkingTokenBudget = thinkingEnabled ?: -1,
         )
     }
 
     /**
      * Rough token usage estimate (chars/4, mirroring the engine's estimator).
+     * [thinkingTokens] (engine-measured, if the model reasoned) is reported in
+     * `completion_tokens_details.reasoning_tokens` like Gemini/OpenAI do.
      */
-    fun estimateUsage(promptText: String, reply: String): Usage {
+    fun estimateUsage(promptText: String, reply: String, thinkingTokens: Int = 0): Usage {
         val promptTokens = (promptText.length / 4).coerceAtLeast(1)
         val completionTokens = (reply.length / 4).coerceAtLeast(0)
         return Usage(
             promptTokens = promptTokens,
             completionTokens = completionTokens,
-            totalTokens = promptTokens + completionTokens,
+            totalTokens = promptTokens + completionTokens + thinkingTokens,
+            completionTokensDetails = CompletionTokensDetails(reasoningTokens = thinkingTokens),
         )
     }
 }

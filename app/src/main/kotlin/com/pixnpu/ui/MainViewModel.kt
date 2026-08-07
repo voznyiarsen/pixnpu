@@ -430,6 +430,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         routerModeProvider = { _apiRouterEnabled.value },
                         routerLoader = { modelId -> loadModelForApi(modelId) },
                         routerUnloader = { modelId -> unloadModelForApi(modelId) },
+                        loadingModelIdProvider = {
+                            _isLoadingModel.value?.let { name ->
+                                manager.models.value.firstOrNull { it.name == name }?.id
+                            }
+                        },
                     )
                 }
                 _apiServerEnabled.value = true
