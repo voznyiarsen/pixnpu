@@ -82,6 +82,14 @@ class ChatCompletionsProcessor(private val context: Context) {
 
         /** Ceiling for the base64 *string* length that can decode to the cap. */
         private val MAX_BASE64_LEN = ((MAX_PAYLOAD_BYTES * 4) / 3 + 4).toInt()
+
+        /**
+         * Engine per-generation content cap (mirrors LiteRTLMEngine's guard).
+         * The engine rejects content lists above this with an
+         * IllegalArgumentException; the processor keeps its own copy so the
+         * error surfaces as a clean 400 instead of a 500.
+         */
+        private const val MAX_CONTENT_ITEMS = 10
     }
 
     /** Rejects base64 that would decode past [MAX_PAYLOAD_BYTES]. */
@@ -101,7 +109,12 @@ class ChatCompletionsProcessor(private val context: Context) {
         if (request.messages.isEmpty()) {
             throw ChatCompletionError.BadRequest("'messages' must not be empty")
         }
-        val result = mutableListOf<Content>()
+        val media = mutableListOf<Content>()
+        val text = StringBuilder()
+        fun addText(s: String) {
+            if (text.isNotEmpty()) text.append("\n")
+            text.append(s)
+        }
         for (message in request.messages) {
             val prefix = when (message.role) {
                 "system", "developer" -> rolePrefixSystem
@@ -114,29 +127,46 @@ class ChatCompletionsProcessor(private val context: Context) {
             val content = message.content
             when (content) {
                 is JsonPrimitive -> {
-                    val text = content.contentOrNull
+                    val t = content.contentOrNull
                         ?: throw ChatCompletionError.BadRequest("Message content is null")
-                    if (text.isBlank()) continue
-                    result.add(Content.Text(prefix + text))
+                    if (t.isBlank()) continue
+                    addText(prefix + t)
                 }
 
-                is JsonArray -> {
-                    result.addAll(parseParts(prefix, content))
-                }
+                is JsonArray -> parseParts(prefix, content, ::addText, media)
 
                 else -> throw ChatCompletionError.BadRequest(
                     "Message content must be a string or an array of content parts",
                 )
             }
         }
-        if (result.isEmpty()) {
+        if (text.isEmpty() && media.isEmpty()) {
             throw ChatCompletionError.BadRequest("'messages' contains no usable content")
+        }
+        // The engine caps a generation at MAX_CONTENT_ITEMS content items, so
+        // Pi's screenshot-heavy chats (full message history per request) used
+        // to 400 with "Content exceeds maximum of 10 items". All text is
+        // merged into a single trailing item (media first, text last —
+        // gallery practice), which keeps arbitrarily long text conversations
+        // well under the cap; only an excessive number of media parts can
+        // still trip it, and that is reported as a clean 400.
+        val result = media.toMutableList()
+        if (text.isNotEmpty()) result.add(Content.Text(text.toString()))
+        if (result.size > MAX_CONTENT_ITEMS) {
+            throw ChatCompletionError.BadRequest(
+                "Content exceeds maximum of $MAX_CONTENT_ITEMS items (got ${result.size}) — " +
+                    "reduce the number of images or audio parts",
+            )
         }
         return result
     }
 
-    private fun parseParts(prefix: String, parts: JsonArray): List<Content> {
-        val result = mutableListOf<Content>()
+    private fun parseParts(
+        prefix: String,
+        parts: JsonArray,
+        addText: (String) -> Unit,
+        media: MutableList<Content>,
+    ) {
         for (part in parts) {
             val obj = part.jsonObjectOrNull()
                 ?: throw ChatCompletionError.BadRequest("Content parts must be objects")
@@ -144,19 +174,18 @@ class ChatCompletionsProcessor(private val context: Context) {
                 "text" -> {
                     val text = obj["text"]?.jsonPrimitive?.contentOrNull
                         ?: throw ChatCompletionError.BadRequest("Text part is missing 'text'")
-                    if (text.isNotBlank()) result.add(Content.Text(prefix + text))
+                    if (text.isNotBlank()) addText(prefix + text)
                 }
 
-                "image_url" -> result.add(imagePart(obj))
+                "image_url" -> media.add(imagePart(obj))
 
-                "input_audio" -> result.add(audioPart(obj))
+                "input_audio" -> media.add(audioPart(obj))
 
                 else -> throw ChatCompletionError.BadRequest(
                     "Unsupported content part type '$type' (expected text, image_url or input_audio)",
                 )
             }
         }
-        return result
     }
 
     private fun imagePart(obj: JsonObject): Content {

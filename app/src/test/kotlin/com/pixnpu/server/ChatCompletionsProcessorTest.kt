@@ -44,7 +44,7 @@ class ChatCompletionsProcessorTest {
     // --- buildContent: roles ---
 
     @Test
-    fun `text messages are role-prefixed in order`() {
+    fun `text messages are role-prefixed and merged into one item`() {
         val contents = processor.buildContent(
             request(
                 "system" to "Be concise",
@@ -53,11 +53,22 @@ class ChatCompletionsProcessorTest {
                 "user" to "Again",
             ),
         )
-        assertEquals(4, contents.size)
-        assertEquals(Content.Text("System: Be concise"), contents[0])
-        assertEquals(Content.Text("User: Hello"), contents[1])
-        assertEquals(Content.Text("Assistant: Hi there"), contents[2])
-        assertEquals(Content.Text("User: Again"), contents[3])
+        assertEquals(1, contents.size)
+        assertEquals(
+            Content.Text("System: Be concise\nUser: Hello\nAssistant: Hi there\nUser: Again"),
+            contents[0],
+        )
+    }
+
+    @Test
+    fun `long text conversations merge into one item under the engine cap`() {
+        // Pi sends the full message history on every request; 11+ messages used
+        // to 400 with "Content exceeds maximum of 10 items" because each message
+        // became a separate Content.Text. Merged, any text length is fine.
+        val messages = (1..11).map { i -> "user" to "message $i" }
+        val contents = processor.buildContent(request(*messages.toTypedArray()))
+        assertEquals(1, contents.size)
+        assertTrue(contents[0].toString().contains("message 11"))
     }
 
     @Test
@@ -93,9 +104,8 @@ class ChatCompletionsProcessorTest {
                 "user" to "Hello",
             ),
         )
-        assertEquals(2, contents.size)
-        assertEquals(Content.Text("System: Be concise"), contents[0])
-        assertEquals(Content.Text("User: Hello"), contents[1])
+        assertEquals(1, contents.size)
+        assertEquals(Content.Text("System: Be concise\nUser: Hello"), contents[0])
     }
 
     // --- buildContent: content parts ---
@@ -118,11 +128,30 @@ class ChatCompletionsProcessorTest {
         )
         val contents = processor.buildContent(request)
         assertEquals(2, contents.size)
-        assertEquals(Content.Text("User: describe this"), contents[0])
-        assertTrue(contents[1] is Content.ImageFile)
-        val path = (contents[1] as Content.ImageFile).absolutePath
+        assertTrue(contents[0] is Content.ImageFile)
+        val path = (contents[0] as Content.ImageFile).absolutePath
         assertTrue(File(path).isFile)
         assertEquals(b64, java.util.Base64.getEncoder().encodeToString(File(path).readBytes()))
+        // Text is merged into a single trailing item (media first, text last).
+        assertEquals(Content.Text("User: describe this"), contents[1])
+    }
+
+    @Test
+    fun `more than ten media parts throws BadRequest`() {
+        // Only media can exceed the engine's content cap now that text merges
+        // into one item; it must surface as a clean 400, not a 500.
+        val parts = (1..11).joinToString(",") {
+            """{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}"""
+        }
+        val request = ChatCompletionRequest(
+            messages = listOf(
+                ChatMessage(role = "user", content = json.parseToJsonElement("[$parts]")),
+            ),
+        )
+        val e = assertThrows(ChatCompletionError.BadRequest::class.java) {
+            processor.buildContent(request)
+        }
+        assertTrue(e.message!!.contains("Content exceeds maximum of 10 items"))
     }
 
     @Test

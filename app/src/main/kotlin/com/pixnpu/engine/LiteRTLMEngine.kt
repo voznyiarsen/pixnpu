@@ -170,6 +170,41 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
       private val maxContentItems = 10
 
       /**
+       * Thinking models (Gemma 3+/4) leak channel-switch control tokens into
+       * the text stream: "<|channel|>" plus the name of the channel they
+       * switch to (e.g. "<|channel|> <|reason|>"). The reasoning itself
+       * arrives via channels["thought"], so the markers are not part of the
+       * visible reply — strip them, keeping any actual text.
+       */
+      private val channelMarkerRegex = Regex("<\\|channel\\|>(?:\\s*<\\|[a-z_]+\\|>)?")
+
+      private fun String.stripChannelMarkers(): String = replace(channelMarkerRegex, "")
+
+      /**
+       * Bounds a content list to [maxContentItems]: all text parts are merged
+       * into a single trailing text item (media first, text last — gallery
+       * practice), and if media alone still exceeds the cap the OLDEST items
+       * are dropped. The merged text is always the last item, so the current
+       * user prompt survives eviction. Long media-heavy histories never fail
+       * with "Content exceeds maximum of N items".
+       */
+      private fun boundContentItems(items: List<Content>, max: Int = maxContentItems): List<Content> {
+          val text = StringBuilder()
+          val media = mutableListOf<Content>()
+          for (item in items) {
+              if (item is Content.Text) {
+                  if (text.isNotEmpty()) text.append("\n")
+                  text.append(item.text)
+              } else {
+                  media.add(item)
+              }
+          }
+          val result = if (text.isEmpty()) media else media + Content.Text(text.toString())
+          if (result.size <= max) return result
+          return result.takeLast(max)
+      }
+
+      /**
        * Generates a reply from a text prompt. Streams tokens as they arrive.
        * 
        * @param prompt The user prompt text
@@ -348,6 +383,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                       val tokenText = message.contents.contents
                           .filterIsInstance<Content.Text>()
                           .joinToString("") { it.text }
+                          .stripChannelMarkers()
                       message.channels["thought"]?.let { thinking ->
                           if (thinking.length > thinkingSeen) thinkingSeen = thinking.length
                       }
@@ -415,6 +451,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
                   val reply = replyMessage.contents.contents
                       .filterIsInstance<Content.Text>()
                       .joinToString("")
+                      .stripChannelMarkers()
                   replyMessage.channels["thought"]?.let { thinking ->
                       mutex.withLock {
                           _metrics.value = _metrics.value.copy(
@@ -534,6 +571,11 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
           // Add the new user message
           historyContents.addAll(newUserContent.contents)
           Log.d("LiteRTLMEngine", "Added new user message (${newUserContent.contents.size} contents)")
+
+          // Bound to the engine's per-generation content cap: merge all text
+          // into one trailing item and evict the oldest media if a long
+          // history would still exceed it (see boundContentItems).
+          val boundedContents = boundContentItems(historyContents)
           
           // Create a new conversation with system prompt
           Log.d("LiteRTLMEngine", "Creating new conversation with system prompt (${systemPrompt.length} chars)")
@@ -557,8 +599,8 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
           )
           
           // Build the full prompt with history
-          val fullPromptContents = Contents.of(historyContents)
-          Log.d("LiteRTLMEngine", "Sending message with ${historyContents.size} history items")
+          val fullPromptContents = Contents.of(boundedContents)
+          Log.d("LiteRTLMEngine", "Sending message with ${boundedContents.size} history items")
           
           return Pair(newConversation, fullPromptContents)
       }

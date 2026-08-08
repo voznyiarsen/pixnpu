@@ -128,7 +128,12 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 - **Stateless per request**: the full `messages` array is flattened into one role-prefixed
   prompt (`System:`/`User:`/`Assistant:`; **`developer` role maps to `System:`** — Pi
   sends it for system instructions) and generated with `trackHistory=false`, so API
-  calls never read from or write to the app chat. `temperature`, `top_p`,
+  calls never read from or write to the app chat. **All text is merged into a single
+  trailing `Content.Text`** (media first, text last — gallery practice), so Pi's
+  screenshot-heavy chats that resend the full history never trip the engine's 10-item
+  content cap ("Content exceeds maximum of 10 items" → now a clean 400 only when
+  media parts alone exceed 10; server-side `MAX_CONTENT_ITEMS` mirrors the engine
+  guard). `temperature`, `top_p`,
   `max_tokens`/`max_completion_tokens` map to `paramsOverride` in `engine.generate(...)`.
   `n` is accepted only as 1 (else 400, `param:"n"`); unknown params are ignored
   (vLLM/llama.cpp convention); `max_tokens` + `max_completion_tokens` together → 400.
@@ -141,6 +146,9 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   in `Message.channels["thought"]` (gallery's `LlmChatModelHelper` reads the same key);
   it is **counted** (engine `metrics.thinkingTokens`, chars/4 estimate) but never emitted
   as reply text, and history stripping (`stripReasoning`) keeps prior turns clean.
+  **Thinking models also leak `<|channel|> <|reason|>`-style switch markers into the
+  Content.Text stream** (gemma-4-E2B-it replied with a bare `<|channel|>`); the engine
+  strips them (`stripChannelMarkers`) from both the async and sync text paths.
   `usage.completion_tokens_details.reasoning_tokens` reports the count (OpenAI/Gemini
   style).
 - Streaming: real per-token deltas from `sendMessageAsync` (coroutines 1.11 ABI
@@ -315,6 +323,9 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 - **Multi-turn history**: the engine streams `sendMessageAsync(fullPrompt)` where
   `fullPrompt` = cleaned history + new user content (returned by
   `buildConversationWithCleanedHistory`); the sync fallback uses the same prompt.
+  History is bounded to the engine's 10-item content cap by `boundContentItems`
+  (all text merged into one trailing item, oldest media evicted if needed) so
+  long media-heavy conversations never fail natively.
 
 ### Settings
 - **Thinking / Reasoning toggle** (prefs `thinking_enabled`, `thinking_budget`,
