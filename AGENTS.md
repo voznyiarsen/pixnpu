@@ -266,8 +266,23 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
    Google Tensor `dispatch_api_so`, so NPU init succeeds but every inference
    fails for some models; the degradation above absorbs that on the first
    failed prompt instead of crashing or erroring.
+5. **No speculative decoding** — LiteRT-LM 0.15.0 has no enablement API
+   (`Capabilities.hasSpeculativeDecodingSupport()` is report-only), so there is
+   no SD toggle; only the API surfaces are documented. Verified via `javap` on
+   the AAR: `ConversationConfig` has no draft-model field.
 
 ## Improvements Implemented
+
+### Chat UI
+- **Message queueing**: sending while a generation runs no longer drops the
+  message — it is queued FIFO (cap 5) and runs when the current reply
+  finishes (`MainViewModel.send` enqueues, `sendInternal` fires the next
+  queued send from its `finally`). The payload (text + attachments) is
+  captured at enqueue time and the pending chips clear immediately; the chat
+  shows a "N messages queued" chip above the composer; the composer keeps the
+  Send button (labeled "Queue message") next to Stop while generating; Stop
+  also clears the queue (explicit halt intent). `queuedCount` StateFlow drives
+  the chip. The API server is unaffected (busy = 429 stays).
 
 ### Chat UI
 - **Markdown rendering on by default** (`Markdown.kt`): headings, bold/italic,
@@ -299,6 +314,23 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
 - **Multi-turn history**: the engine streams `sendMessageAsync(fullPrompt)` where
   `fullPrompt` = cleaned history + new user content (returned by
   `buildConversationWithCleanedHistory`); the sync fallback uses the same prompt.
+
+### Settings
+- **Thinking / Reasoning toggle** (prefs `thinking_enabled`, `thinking_budget`,
+  default off / unbounded): sets `GenerationParams.thinkingEnabled` +
+  `thinkingTokenBudget`, applied through the normal params path (reconfig
+  watcher → `createNewConversation` → `ThinkingConfig`, same code the API uses
+  for `thinking_budget_tokens`). Budget chips: Auto (-1, unbounded), 64, 128,
+  256, 512. Only meaningful on thinking-capable models (Gemma 3+).
+- **Inference Backend selector** (prefs `backend_preference`, default
+  `Auto`): `BackendPreference` enum (Auto / CPU / GPU / NPU) persisted in
+  MainViewModel and passed to `engine.load(..., backendPreference)`. **Auto**
+  keeps the NPU→GPU→CPU candidate order + automatic degradation on dispatch
+  failures; a **pinned** backend loads exactly that backend and disables
+  degradation (`degradeToGpu` returns false when the preference is not Auto),
+  so failures surface instead of silently switching accelerators. Applies on
+  the next model load — the settings screen says so, and a toast reminds the
+  user when a model is already loaded.
 
 ### Stability
 - **Thread-safe engine state**: All state access in `LiteRTLMEngine` is now protected by mutex

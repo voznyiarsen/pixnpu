@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.google.ai.edge.litertlm.Content
 import com.pixnpu.PixNpuForegroundService
 import com.pixnpu.di.AppContainer
+import com.pixnpu.engine.BackendPreference
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.PromptTemplate
@@ -105,6 +106,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    /** Messages waiting for the current generation to finish (FIFO). */
+    private val queuedSends = ArrayDeque<QueuedSend>()
+    private val _queuedCount = MutableStateFlow(0)
+    val queuedCount: StateFlow<Int> = _queuedCount.asStateFlow()
+
+    /** Cap on queued messages — the queue is a convenience, not a mail server. */
+    private val maxQueuedSends = 5
+
+    /** User-selected accelerator preference (Auto = NPU → GPU → CPU with degradation). */
+    private val _backendPreference = MutableStateFlow(
+        prefs.getString("backend_preference", null)
+            ?.let { name -> runCatching { BackendPreference.valueOf(name) }.getOrNull() }
+            ?: BackendPreference.Auto,
+    )
+    val backendPreference: StateFlow<BackendPreference> = _backendPreference.asStateFlow()
+
     private val _isLoadingModel = MutableStateFlow<String?>(null)
     val isLoadingModel: StateFlow<String?> = _isLoadingModel.asStateFlow()
 
@@ -174,6 +191,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             topP = prefs.getFloat("param_topP", GenerationParams().topP),
             maxTokens = prefs.getInt("param_maxTokens", GenerationParams().maxTokens),
             contextTokens = prefs.getInt("param_contextTokens", GenerationParams().contextTokens),
+            thinkingEnabled = prefs.getBoolean("thinking_enabled", GenerationParams().thinkingEnabled),
+            thinkingTokenBudget = prefs.getInt(
+                "thinking_budget",
+                GenerationParams().thinkingTokenBudget,
+            ),
         )
         _systemPrompt.value = prefs.getString("system_prompt", "") ?: ""
         _template.value = prefs.getString("template", null)
@@ -203,6 +225,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putFloat("param_topP", params.topP)
             .putInt("param_maxTokens", params.maxTokens)
             .putInt("param_contextTokens", params.contextTokens)
+            .putBoolean("thinking_enabled", params.thinkingEnabled)
+            .putInt("thinking_budget", params.thinkingTokenBudget)
             .apply()
     }
 
@@ -252,6 +276,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setSelectedModality(modality: Modality) {
         _selectedModality.value = modality
         prefs.edit().putString("modality", modality.name).apply()
+    }
+
+    /**
+     * Sets the accelerator preference. Applies on the next model load (a
+     * running engine keeps its backend until then).
+     */
+    fun setBackendPreference(preference: BackendPreference) {
+        if (preference == _backendPreference.value) return
+        _backendPreference.value = preference
+        prefs.edit().putString("backend_preference", preference.name).apply()
+        _engineMessage.value = if (engine.isLoaded) {
+            "Backend set to ${preference.label} — reload the model to apply"
+        } else {
+            "Backend set to ${preference.label}"
+        }
     }
 
     fun setApiPort(port: Int) {
@@ -395,6 +434,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _keepScreenOn.value = false
         _markdownEnabled.value = true
         _samplingPresets.value = emptyList()
+        _backendPreference.value = BackendPreference.Auto
+        queuedSends.clear()
+        _queuedCount.value = 0
         prefs.edit().clear().apply()
         _engineMessage.value = "Settings reset to defaults"
     }
@@ -512,7 +554,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return try {
             withContext(Dispatchers.IO) {
                 if (engine.isLoaded) engine.unload()
-                engine.load(model.absolutePath, _params.value, modality)
+                engine.load(model.absolutePath, _params.value, modality, _backendPreference.value)
                 engine.clearHistory()
             }
             _selectedModel.value = model
@@ -653,15 +695,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _engineMessage.value = "Prompt exceeds maximum length of $maxPromptLength characters"
             return
         }
-        
-        if (_isGenerating.value) {
-            Log.w("MainViewModel", "send() called while generating, ignoring")
-            return
-        }
         if (!engine.isLoaded) {
             _engineMessage.value = "No model loaded. Select a model from Models tab."
             return
         }
+        if (_isGenerating.value) {
+            // The engine is busy: queue the message (payload captured now) and
+            // run it as soon as the current generation finishes. The queue is
+            // FIFO and bounded; stop() clears it.
+            if (queuedSends.size >= maxQueuedSends) {
+                _engineMessage.value = "Queue full ($maxQueuedSends) — wait for the current reply or press Stop"
+                return
+            }
+            queuedSends.addLast(QueuedSend(prompt, imageUri, audio, textFile, video))
+            _queuedCount.value = queuedSends.size
+            _engineMessage.value = "Message queued — ${queuedSends.size} in line"
+            // The payload is captured; drop the pending chips so the UI doesn't
+            // show stale attachments as if they were still un-sent.
+            _pendingImageUri.value = null
+            _pendingAudio.value = null
+            _pendingTextFile.value = null
+            _pendingVideo.value = null
+            return
+        }
+        sendInternal(prompt, imageUri, audio, textFile, video)
+    }
+
+    /**
+     * Runs one turn on the engine: appends the user + assistant messages,
+     * streams the reply, then fires the next queued message (if any).
+     */
+    private fun sendInternal(
+        text: String,
+        imageUri: Uri?,
+        audio: AudioClip?,
+        textFile: TextFileClip?,
+        video: VideoClip?,
+    ) {
+        val prompt = text
 
         Log.d("MainViewModel", "Sending prompt (${prompt.length} chars, image=${imageUri != null}, audio=${audio != null}, file=${textFile != null}, video=${video != null})")
         val userMessage = ChatMessage(
@@ -775,6 +846,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 releaseBackgroundClient()
+                // Kick off the next queued message, if any.
+                val next = queuedSends.removeFirstOrNull()
+                if (next != null) {
+                    _queuedCount.value = queuedSends.size
+                    sendInternal(next.text, next.imageUri, next.audio, next.textFile, next.video)
+                }
             }
         }
     }
@@ -815,6 +892,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         Log.d("MainViewModel", "Stopping generation")
         engine.cancel()
         generationJob?.cancel()
+        // Stop is explicit intent to abort: drop queued messages too, so the
+        // queue can't fire after the user already asked to halt.
+        queuedSends.clear()
+        _queuedCount.value = 0
     }
 
     fun clearChat() {
@@ -847,3 +928,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 }
+
+/**
+ * A send() call that arrived while a generation was running. The payload is
+ * captured at enqueue time (pending attachments, text) so the queue keeps
+ * working even if the user changes attachments before the turn starts.
+ */
+private data class QueuedSend(
+    val text: String,
+    val imageUri: Uri?,
+    val audio: AudioClip?,
+    val textFile: TextFileClip?,
+    val video: VideoClip?,
+)

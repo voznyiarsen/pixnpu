@@ -96,6 +96,8 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val template by vm.template.collectAsStateWithLifecycle()
     val selectedModel by vm.selectedModel.collectAsStateWithLifecycle()
     val isGenerating by vm.isGenerating.collectAsStateWithLifecycle()
+    val queuedCount by vm.queuedCount.collectAsStateWithLifecycle()
+    val backendPreference by vm.backendPreference.collectAsStateWithLifecycle()
     val isLoadingModel by vm.isLoadingModel.collectAsStateWithLifecycle()
     val modelLoadStatus by vm.modelLoadStatus.collectAsStateWithLifecycle()
     val engineMessage by vm.engineMessage.collectAsStateWithLifecycle()
@@ -245,6 +247,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                              Screen.CHAT -> InferenceScreen(
                                  messages = messages,
                                  isGenerating = isGenerating,
+                                 queuedCount = queuedCount,
                                  isLoadingModel = isLoadingModel != null,
                                  selectedModel = selectedModel?.name,
                                  pendingImageUri = pendingImageUri,
@@ -286,6 +289,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  systemPrompt = systemPrompt,
                                  template = template,
                                  modality = selectedModality,
+                                 backendPreference = backendPreference,
                                  isGenerating = isGenerating,
                                  apiServerEnabled = apiServerEnabled,
                                  apiRouterEnabled = apiRouterEnabled,
@@ -300,6 +304,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                  onChangeSystemPrompt = vm::updateSystemPrompt,
                                  onChangeTemplate = vm::setTemplate,
                                  onModalityChange = vm::setSelectedModality,
+                                 onBackendPreferenceChange = vm::setBackendPreference,
                                  onToggleApiServer = vm::toggleApiServer,
                                  onToggleApiRouter = vm::setApiRouterEnabled,
                                  onApiHostChange = vm::setApiHost,

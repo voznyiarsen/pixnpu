@@ -59,6 +59,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pixnpu.BuildConfig
+import com.pixnpu.engine.BackendPreference
 import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.Modality
 import com.pixnpu.engine.PromptTemplate
@@ -79,6 +80,7 @@ fun SettingsScreen(
     systemPrompt: String,
     template: PromptTemplate,
     modality: Modality,
+    backendPreference: BackendPreference,
     isGenerating: Boolean,
     apiServerEnabled: Boolean,
     apiRouterEnabled: Boolean,
@@ -93,6 +95,7 @@ fun SettingsScreen(
     onChangeSystemPrompt: (String) -> Unit,
     onChangeTemplate: (PromptTemplate) -> Unit,
     onModalityChange: (Modality) -> Unit,
+    onBackendPreferenceChange: (BackendPreference) -> Unit,
     onToggleApiServer: () -> Unit,
     onToggleApiRouter: (Boolean) -> Unit,
     onApiHostChange: (String) -> Unit,
@@ -312,6 +315,12 @@ fun SettingsScreen(
                 onChangeParams = onChangeParams,
                 onChangeSystemPrompt = onChangeSystemPrompt,
                 onChangeTemplate = onChangeTemplate,
+            )
+
+            SectionHeader("Inference Backend")
+            BackendPreferenceSection(
+                preference = backendPreference,
+                onPreferenceChange = onBackendPreferenceChange,
             )
 
             SectionHeader("Other")
@@ -596,6 +605,50 @@ private fun GenerationParamsSection(
             },
         )
 
+        var thinkingEnabled by remember(params.thinkingEnabled) { mutableStateOf(params.thinkingEnabled) }
+        var thinkingBudget by remember(params.thinkingTokenBudget) { mutableStateOf(params.thinkingTokenBudget) }
+        ToggleRow(
+            title = "Thinking / Reasoning",
+            subtitle = "Let the model reason step-by-step before answering " +
+                "(Gemma 3+ and other thinking-capable models; reasoning shows in " +
+                "the reply and is counted toward usage)",
+            checked = thinkingEnabled,
+            onCheckedChange = { on ->
+                thinkingEnabled = on
+                onChangeParams(params.copy(thinkingEnabled = on))
+            },
+        )
+        if (thinkingEnabled) {
+            Text(
+                text = "Reasoning budget",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                thinkingBudgets.forEach { (budget, label) ->
+                    FilterChip(
+                        selected = thinkingBudget == budget,
+                        onClick = {
+                            thinkingBudget = budget
+                            onChangeParams(
+                                params.copy(thinkingEnabled = true, thinkingTokenBudget = budget),
+                            )
+                        },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            Text(
+                text = "How much the model may reason before answering. Auto = " +
+                    "unlimited; capped values make replies start sooner.",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         var expanded by remember { mutableStateOf(false) }
         Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
             Box {
@@ -645,6 +698,58 @@ private fun GenerationParamsSection(
         )
 
         AppLogSection()
+    }
+}
+
+/** (budget tokens, chip label); -1 = unbounded. Mirrors the engine default. */
+private val thinkingBudgets = listOf(
+    -1 to "Auto",
+    64 to "64",
+    128 to "128",
+    256 to "256",
+    512 to "512",
+)
+
+/** Accelerator selection: Auto (NPU→GPU→CPU with degradation) or a pinned backend. */
+@Composable
+private fun BackendPreferenceSection(
+    preference: BackendPreference,
+    onPreferenceChange: (BackendPreference) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BackendPreference.entries.forEach { entry ->
+                FilterChip(
+                    selected = preference == entry,
+                    onClick = { onPreferenceChange(entry) },
+                    label = { Text(entry.label) },
+                )
+            }
+        }
+        Text(
+            text = when (preference) {
+                BackendPreference.Auto ->
+                    "Try the NPU, fall back to GPU then CPU, and degrade automatically " +
+                        "if a backend fails at dispatch time."
+                BackendPreference.NPU ->
+                    "Tensor NPU only — fastest, but some models fail without the " +
+                        "dispatch library (see the app log). No automatic fallback."
+                BackendPreference.GPU ->
+                    "GPU only — good speed, wider model compatibility."
+                BackendPreference.CPU ->
+                    "CPU only — slowest, but the most compatible."
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "Applies on the next model load (a loaded model keeps its backend).",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

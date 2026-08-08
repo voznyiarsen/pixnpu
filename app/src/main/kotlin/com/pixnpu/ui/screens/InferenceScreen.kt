@@ -116,6 +116,7 @@ import kotlinx.coroutines.withContext
 fun InferenceScreen(
     messages: List<ChatMessage>,
     isGenerating: Boolean,
+    queuedCount: Int = 0,
     isLoadingModel: Boolean,
     selectedModel: String?,
     pendingImageUri: Uri?,
@@ -282,6 +283,27 @@ fun InferenceScreen(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
             )
+        }
+
+        if (queuedCount > 0) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = if (queuedCount == 1) {
+                        "1 message queued — runs when the current reply finishes"
+                    } else {
+                        "$queuedCount messages queued — each runs after the previous reply"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
         }
 
         InputBar(
@@ -767,44 +789,44 @@ private fun InputBar(
                             modifier = Modifier.size(24.dp),
                         )
                     }
-                } else {
-                    val canSend = value.isNotBlank() || pendingImageUri != null || pendingAudio != null || pendingTextFile != null || pendingVideo != null
-                    FilledIconButton(
-                        onClick = onSend,
-                        enabled = canSend,
-                        shape = RoundedCornerShape(36.dp),
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = Color.Transparent,
-                            contentColor = Color.Unspecified,
+                }
+                val canSend = value.isNotBlank() || pendingImageUri != null || pendingAudio != null || pendingTextFile != null || pendingVideo != null
+                FilledIconButton(
+                    onClick = onSend,
+                    enabled = canSend,
+                    shape = RoundedCornerShape(36.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = Color.Unspecified,
+                    ),
+                    modifier = Modifier
+                        .size(56.dp)
+                        .background(
+                            brush = if (canSend) {
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.primary,
+                                        MaterialTheme.colorScheme.tertiary,
+                                    ),
+                                )
+                            } else {
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.surfaceVariant,
+                                        MaterialTheme.colorScheme.surfaceVariant,
+                                    ),
+                                )
+                            },
+                            shape = RoundedCornerShape(36.dp),
                         ),
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(
-                                brush = if (canSend) {
-                                    Brush.horizontalGradient(
-                                        listOf(
-                                            MaterialTheme.colorScheme.primary,
-                                            MaterialTheme.colorScheme.tertiary,
-                                        ),
-                                    )
-                                } else {
-                                    Brush.horizontalGradient(
-                                        listOf(
-                                            MaterialTheme.colorScheme.surfaceVariant,
-                                            MaterialTheme.colorScheme.surfaceVariant,
-                                        ),
-                                    )
-                                },
-                                shape = RoundedCornerShape(36.dp),
-                            ),
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        // While generating the send button queues the message.
+                        contentDescription = if (isGenerating) "Queue message" else "Send",
+                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
+                    )
                 }
             }
         }
