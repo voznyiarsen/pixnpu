@@ -1,5 +1,8 @@
 package com.pixnpu.server
 
+import com.pixnpu.engine.InferenceMetrics
+import com.pixnpu.model.LocalModel
+import com.pixnpu.model.id
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -166,7 +169,15 @@ data class ModelStatus(
      */
     val failed: Boolean = false,
     @SerialName("exit_code") val exitCode: Int? = null,
-    val args: JsonObject = JsonObject(emptyMap()),
+    /**
+     * The CLI args the server (would) load the model with — a string array,
+     * exactly like llama.cpp. This MUST stay a list: Pi's llama.cpp extension
+     * calls `args.indexOf("--ctx-size")` while the model is unloaded, so a
+     * JSON object (`{}`) here throws a TypeError inside its provider
+     * registration, which surfaces as a bogus "Llama.cpp unreachable" error
+     * and an empty model registry ("Cannot find model ... in pi registry").
+     */
+    val args: List<String> = emptyList(),
 )
 
 @Serializable
@@ -201,3 +212,59 @@ data class ServiceInfo(
         "/detokenize",
     ),
 )
+
+/**
+ * The llama.cpp /models + /v1/models listing shared by both routes. Every
+ * installed model is always reported (in both operating modes) — Pi's
+ * `detectServerMode` reads `data[0]`, so an empty list crashes its provider
+ * registration into a bogus "unreachable" error.
+ *
+ * - `status.value` uses the llama.cpp contract "loaded" / "unloaded" (Pi's
+ *   /llama UI warns "X is not loaded" and hides the load action for any other
+ *   value; "failed" stops Pi's loadAndWait polling on a broken load).
+ * - `aliases` carries the bare model id first (Pi displays `aliases[0]`) and
+ *   the file name second, like llama.cpp's path-derived aliases.
+ * - `meta.n_ctx` + `architecture` are reported only for the resident model
+ *   (Pi reads them for the context window / modality gates).
+ * - `status.args` always contains `--ctx-size` so Pi can size unloaded
+ *   models from the engine's real default instead of falling back to 128000.
+ */
+internal fun installedModelList(
+    models: List<LocalModel>,
+    loadedId: String?,
+    failedId: String?,
+    contextTokens: Int,
+    metrics: InferenceMetrics,
+): List<ModelInfo> {
+    val args = listOf("--ctx-size", contextTokens.toString())
+    return models.map { model ->
+        val isLoaded = model.id == loadedId
+        ModelInfo(
+            id = model.id,
+            created = model.lastModified / 1000,
+            aliases = listOf(model.id, model.name),
+            status = ModelStatus(
+                value = if (isLoaded) "loaded" else "unloaded",
+                failed = model.id == failedId,
+                args = args,
+            ),
+            meta = if (isLoaded) {
+                ModelMeta(nCtx = metrics.maxContextTokens.coerceAtLeast(1))
+            } else {
+                null
+            },
+            architecture = if (isLoaded) {
+                ModelArchitecture(
+                    inputModalities = buildList {
+                        add("text")
+                        if (metrics.supportsVision) add("image")
+                        if (metrics.supportsVideo) add("video")
+                        if (metrics.supportsAudio) add("audio")
+                    },
+                )
+            } else {
+                null
+            },
+        )
+    }
+}

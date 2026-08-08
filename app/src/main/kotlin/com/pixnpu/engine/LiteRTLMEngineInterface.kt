@@ -25,9 +25,17 @@ interface LiteRTLMEngineInterface {
       * @param modelPath The path to the .litertlm model file
       * @param params The generation parameters to use
       * @param modality The user-chosen input modality (text/audio/vision/audio+vision)
+      * @param backendPreference Accelerator preference (Auto falls back through
+      *        NPU → GPU → CPU with automatic degradation; an explicit choice pins
+      *        the load to that backend and surfaces failures instead)
       * @return The active backend that was used for loading
       */
-     suspend fun load(modelPath: String, params: GenerationParams, modality: Modality = Modality.TextOnly): ActiveBackend
+     suspend fun load(
+         modelPath: String,
+         params: GenerationParams,
+         modality: Modality = Modality.TextOnly,
+         backendPreference: BackendPreference = BackendPreference.Auto,
+     ): ActiveBackend
     
     /**
      * Reconfigure the engine with new parameters and system prompt

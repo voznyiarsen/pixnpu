@@ -50,6 +50,7 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
     private var currentSystemPrompt: String = ""
     private var currentModelPath: String? = null
     private var currentModality: Modality = Modality.TextOnly
+    private var preferredBackend: BackendPreference = BackendPreference.Auto
 
     // Set once a generation fails with a backend (NPU dispatch) error: the
     // engine is reloaded on GPU and every subsequent load skips NPU. This
@@ -90,12 +91,18 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
       val supportsAudio: Boolean get() = threadSafe { activeSupportsAudio }
       val supportsVideo: Boolean get() = threadSafe { activeSupportsVision && activeSupportsAudio }
 
-     override suspend fun load(modelPath: String, params: GenerationParams, modality: Modality): ActiveBackend =
+     override suspend fun load(
+         modelPath: String,
+         params: GenerationParams,
+         modality: Modality,
+         backendPreference: BackendPreference,
+     ): ActiveBackend =
          mutex.withLock {
-             Log.d("LiteRTLMEngine", "Loading model: $modelPath modality=$modality")
+             Log.d("LiteRTLMEngine", "Loading model: $modelPath modality=$modality backendPreference=$backendPreference")
              releaseConversation()
              unloadEngine()
              conversationHistory.clear()
+             preferredBackend = backendPreference
              val init = initializeBackend(modelPath, params, modality)
              activeBackend = init.backend
              activeSupportsVision = modality.supportsVision
@@ -578,12 +585,17 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
     }
 
      private suspend fun initializeBackend(modelPath: String, params: GenerationParams, modality: Modality): InitResult {
-         val backendCandidates = buildList {
-             // After a dispatch failure NPU is skipped entirely: its init succeeds
-             // but every inference fails, so retrying NPU wastes a full load cycle.
-             if (!degradedBackend.get()) add(ActiveBackend.NPU)
-             add(ActiveBackend.GPU)
-             add(ActiveBackend.CPU())
+         val backendCandidates = when (preferredBackend) {
+             BackendPreference.Auto -> buildList {
+                 // After a dispatch failure NPU is skipped entirely: its init succeeds
+                 // but every inference fails, so retrying NPU wastes a full load cycle.
+                 if (!degradedBackend.get()) add(ActiveBackend.NPU)
+                 add(ActiveBackend.GPU)
+                 add(ActiveBackend.CPU())
+             }
+             BackendPreference.CPU -> listOf(ActiveBackend.CPU())
+             BackendPreference.GPU -> listOf(ActiveBackend.GPU)
+             BackendPreference.NPU -> listOf(ActiveBackend.NPU)
          }
          var lastError: Throwable? = null
          for (candidate in backendCandidates) {
@@ -628,7 +640,8 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
          }
          _metrics.value = _metrics.value.copy(status = EngineStatus.Error)
          throw IllegalStateException(
-             "Failed to initialize model on any backend (NPU/GPU/CPU) for modality=$modality: ${lastError?.message}",
+             "Failed to initialize model on backend(s) ${backendCandidates.joinToString("/") { it.label }} " +
+                 "for modality=$modality: ${lastError?.message}",
          )
      }
 
@@ -736,6 +749,9 @@ class LiteRTLMEngine(private val context: Context) : LiteRTLMEngineInterface {
      * current backend is NPU (degrading a GPU/CPU run would be pointless).
      */
     private suspend fun degradeToGpu(): Boolean = mutex.withLock {
+        // An explicit backend preference is a user choice: honor it by
+        // surfacing the failure instead of silently switching accelerators.
+        if (preferredBackend != BackendPreference.Auto) return@withLock false
         if (degradedBackend.get()) return@withLock false
         val path = currentModelPath ?: return@withLock false
         val params = currentParams ?: return@withLock false

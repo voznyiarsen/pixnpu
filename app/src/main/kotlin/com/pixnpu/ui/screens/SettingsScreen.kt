@@ -141,10 +141,11 @@ fun SettingsScreen(
         ToggleRow(
             title = "Router Mode",
             subtitle = if (apiRouterEnabled) {
-                "llama.cpp router — requests name any installed model and it is " +
-                    "loaded on demand; the server can start without a loaded model"
+                "Chat requests name any installed model and it is loaded on " +
+                    "demand; the server can start without a loaded model"
             } else {
-                "Serve the loaded model only (llama.cpp single-model mode)"
+                "Chat requests must name the loaded model (llama.cpp " +
+                    "single-model mode); model list and load/unload stay available"
             },
             checked = apiRouterEnabled,
             onCheckedChange = onToggleApiRouter,

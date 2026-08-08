@@ -59,8 +59,12 @@ class LlamaApiTest {
         override val metrics: StateFlow<InferenceMetrics> = _metrics.asStateFlow()
 
         override val isLoaded: Boolean get() = loaded
-        override suspend fun load(modelPath: String, params: GenerationParams, modality: Modality): ActiveBackend =
-            ActiveBackend.CPU()
+        override suspend fun load(
+            modelPath: String,
+            params: GenerationParams,
+            modality: Modality,
+            backendPreference: com.pixnpu.engine.BackendPreference,
+        ): ActiveBackend = ActiveBackend.CPU()
 
         override suspend fun reconfigure(params: GenerationParams, systemPrompt: String) = Unit
 
@@ -356,6 +360,48 @@ class LlamaApiTest {
             assertEquals(HttpStatusCode.NotFound, response.status)
         }
 
+    @Test
+    fun `props with non-resident model returns 400 in single-model mode`() =
+        testServer(FakeEngine(), models = routerModels) {
+            // Pi's SingleModel polls /props?model=<id>; a 400 "model is not
+            // loaded" is its unloaded state. Answering 200 with the loaded
+            // model's props would make Pi think the requested model is loaded.
+            val response = get("/props?model=llama3-2")
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            val body = json.decodeFromString<LlamaPropsErrorBody>(response.bodyAsText())
+            assertEquals(400, body.error.code)
+            assertEquals("model is not loaded", body.error.message)
+        }
+
+    @Test
+    fun `props with loading model returns 503 in single-model mode`() =
+        testServer(FakeEngine(), models = routerModels, loadingModelId = "llama3-2") {
+            val response = get("/props?model=llama3-2")
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            val body = json.decodeFromString<LlamaPropsErrorBody>(response.bodyAsText())
+            assertEquals(503, body.error.code)
+            assertEquals("model is loading", body.error.message)
+        }
+
+    @Test
+    fun `props for the loaded model works in single-model mode`() =
+        testServer(
+            FakeEngine().apply { modelId = "llama3-2"; modelPath = "/models/llama3-2.litertlm" },
+            models = routerModels,
+        ) {
+            val response = get("/props?model=llama3-2")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<LlamaProps>(response.bodyAsText())
+            assertEquals("/models/llama3-2.litertlm", body.modelPath)
+        }
+
+    @Test
+    fun `props with unknown model returns 404 in single-model mode`() =
+        testServer(FakeEngine(), models = routerModels) {
+            val response = get("/props?model=nope")
+            assertEquals(HttpStatusCode.NotFound, response.status)
+        }
+
     // --- router model management ---
 
     private val routerModels = listOf(
@@ -388,10 +434,37 @@ class LlamaApiTest {
         }
 
     @Test
-    fun `models returns 404 when router mode is disabled`() = testServer(FakeEngine()) {
-        val response = get("/models")
-        assertEquals(HttpStatusCode.NotFound, response.status)
-    }
+    fun `models lists installed models even when router mode is disabled`() =
+        testServer(
+            FakeEngine().apply { modelId = "gemma3-270m-it-q8" },
+            models = routerModels,
+        ) {
+            val response = get("/models")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<ModelListResponse>(response.bodyAsText())
+            assertEquals(2, body.data.size)
+            assertEquals("loaded", body.data[0].status?.value)
+            assertEquals("unloaded", body.data[1].status?.value)
+        }
+
+    @Test
+    fun `models status args is a string array so Pi can parse the ctx size`() =
+        testServer(FakeEngine(), models = routerModels, routerMode = true) {
+            val response = get("/models")
+            val body = json.decodeFromString<ModelListResponse>(response.bodyAsText())
+            // pi-llama-cpp calls args.indexOf("--ctx-size") while a model is
+            // unloaded; a JSON object here throws a TypeError during provider
+            // registration, which surfaces as a bogus "Llama.cpp unreachable"
+            // error and an empty model registry in Pi.
+            val args = body.data.first { it.id == "llama3-2" }.status?.args
+            assertEquals(listOf("--ctx-size", "8192"), args)
+            // llama.cpp path-derived aliases: bare id first (Pi displays it),
+            // file name second.
+            assertEquals(
+                listOf("llama3-2", "llama3-2.litertlm"),
+                body.data.first { it.id == "llama3-2" }.aliases,
+            )
+        }
 
     @Test
     fun `models load responds 200 immediately and loads in the background`() {

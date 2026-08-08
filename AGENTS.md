@@ -185,14 +185,33 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
     being loaded (via `loadingModelIdProvider`, wired to MainViewModel's
     `_isLoadingModel`), **400 `{"error":{"code":400,"message":"model is not loaded"}}`**
     for any installed-but-not-loaded model, 200 + props only when resident.
+    **Single-model mode honors `?model=` the same way** (400 not loaded / 503
+    loading / 404 unknown) — without that, Pi's `SingleModel` polling would take
+    the loaded model's 200 and think a non-resident model is loaded.
   - `GET /slots` — one slot, `state` "idle"/"processing" from `metrics.status`.
-- **Router mode** (Settings toggle, pref `api_router_enabled`, read per request):
-  the server can start with no model loaded and `POST /v1/chat/completions` with
-  any installed model id auto-loads it on demand (via `MainViewModel.loadModelForApi`,
-  which reuses the UI load path so guards/status/chat-clear stay consistent); the
-  busy gate is held across load + generation. `GET /v1/models` and `GET /models`
-  list every installed model with `status: {"value": "loaded"|"unloaded",
-  "failed": bool}` (**llama.cpp contract — NOT "not loaded"**: Pi's `/llama` UI
+- **Model listing + management are UNCONDITIONAL (both modes)** — `GET /v1/models`
+  and `GET /models` always list every installed model (never 404, never empty
+  while models exist): Pi's `detectServerMode` reads `data[0]` and its provider
+  registration crashes on an empty/404 list into a bogus **"Llama.cpp
+  unreachable at <url>"** + empty registry (**"Cannot find model X in pi
+  registry"**). `POST /models/load`/`/models/unload` likewise work in both modes
+  (Pi's single-model UI taps Load/Unload on listed models). The **Settings
+  "Router mode" toggle** therefore only controls on-demand chat loads:
+  `POST /v1/chat/completions` (and `/chat/completions`) with an unloaded model
+  id auto-loads it (via `MainViewModel.loadModelForApi`, which reuses the UI
+  load path so guards/status/chat-clear stay consistent); the busy gate is held
+  across load + generation; single-model mode 404s requests for a non-resident
+  model.
+- **`status.args` MUST be a string array** (`["--ctx-size", "8192", ...]`, llama.cpp
+  format; engine default context). pi-llama-cpp's `RouterModel.extractFrom` calls
+  `args.indexOf("--ctx-size")` while a model is unloaded — a JSON object here
+  throws inside `registerProvider`, which is caught as a server failure and
+  surfaces as the bogus "Llama.cpp unreachable" + "Cannot find model in pi
+  registry" pair. `aliases` = `[bareId, filename]` (llama.cpp path-derived
+  convention; Pi displays `aliases[0]`).
+- **`GET /v1/models` and `GET /models`** list every installed model with
+  `status: {"value": "loaded"|"unloaded", "failed": bool, "args": [...]}`
+  (**llama.cpp contract — NOT "not loaded"**: Pi's `/llama` UI
   shows `Warning: X is not loaded` and hides the "load model" action for any
   other value; the pi-llama-cpp extension's statusMapper likewise expects
   "unloaded"), `owned_by: "llamacpp"` and **`meta.n_ctx` only on the loaded

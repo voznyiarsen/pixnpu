@@ -56,8 +56,12 @@ class OpenAiApiServerTest {
         override val metrics: StateFlow<InferenceMetrics> = _metrics.asStateFlow()
 
         override val isLoaded: Boolean get() = loaded
-        override suspend fun load(modelPath: String, params: GenerationParams, modality: Modality): ActiveBackend =
-            ActiveBackend.CPU()
+        override suspend fun load(
+            modelPath: String,
+            params: GenerationParams,
+            modality: Modality,
+            backendPreference: com.pixnpu.engine.BackendPreference,
+        ): ActiveBackend = ActiveBackend.CPU()
 
         override suspend fun reconfigure(params: GenerationParams, systemPrompt: String) = Unit
 
@@ -140,6 +144,25 @@ class OpenAiApiServerTest {
         assertTrue(body.data.isEmpty())
     }
 
+    @Test
+    fun `single-model mode still lists all installed models with status`() =
+        testServer(
+            FakeEngine().apply { modelId = "gemma3-270m-it-q8" },
+            models = routerModels,
+        ) {
+            // Pi's detectServerMode reads data[0] — an empty list crashes its
+            // provider registration, and its /llama UI needs every installed
+            // model even outside router mode.
+            val response = get("/v1/models")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = json.decodeFromString<ModelListResponse>(response.bodyAsText())
+            assertEquals(2, body.data.size)
+            assertEquals("loaded", body.data[0].status?.value)
+            assertEquals("unloaded", body.data[1].status?.value)
+            assertEquals(8192, body.data[0].meta?.nCtx)
+            assertEquals(null, body.data[1].meta)
+        }
+
     // --- /health ---
 
     @Test
@@ -202,6 +225,9 @@ class OpenAiApiServerTest {
             // architecture.modalities only on the loaded model (vision here).
             assertEquals(listOf("text", "image"), body.data[0].architecture?.inputModalities)
             assertEquals(null, body.data[1].architecture)
+            // status.args must stay a string array (pi-llama-cpp calls
+            // args.indexOf("--ctx-size")); a JSON object breaks registration.
+            assertEquals(listOf("--ctx-size", "8192"), body.data[1].status?.args)
         }
 
     @Test

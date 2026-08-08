@@ -3,6 +3,7 @@ package com.pixnpu.server
 import android.content.Context
 import android.util.Log
 import com.pixnpu.engine.EngineStatus
+import com.pixnpu.engine.GenerationParams
 import com.pixnpu.engine.LiteRTLMEngineInterface
 import com.pixnpu.engine.PromptTemplate
 import com.pixnpu.model.LocalModel
@@ -46,7 +47,7 @@ private const val TAG = "OpenAiApiServer"
  *
  * Endpoints:
  *  - GET  /health, /          basic service info
- *  - GET  /v1/models          currently loaded model
+ *  - GET  /v1/models          every installed model + llama.cpp status
  *  - POST /v1/chat/completions chat completions, JSON or SSE streaming
  *  - POST /completion, GET /props, GET /slots, POST /tokenize, POST /detokenize
  *    llama.cpp server-compatible API (see LlamaApi.kt)
@@ -297,7 +298,6 @@ fun Application.openAiApiModule(
                     ApiError(ErrorBody("Incorrect API key provided", code = "invalid_api_key")),
                 )
             }
-            val router = routerModeProvider()
             val loadedId = modelIdProvider()
             val failedId = loadFailureProvider()
             val now = System.currentTimeMillis() / 1000
@@ -307,40 +307,23 @@ fun Application.openAiApiModule(
                 } else {
                     null
                 }
-            val data = if (router) {
-                // Router mode: every installed model, with llama.cpp status
-                // ("loaded" / "unloaded" — Pi's /llama UI treats any other
-                // value as "not loaded" and hides the load action; "failed"
-                // stops Pi's loadAndWait polling on a broken load).
-                modelsProvider().map { model ->
-                    val isLoaded = model.id == loadedId
-                    ModelInfo(
-                        id = model.id,
-                        created = model.lastModified / 1000,
-                        aliases = listOf(model.id),
-                        status = ModelStatus(
-                            value = if (isLoaded) "loaded" else "unloaded",
-                            failed = model.id == failedId,
-                        ),
-                        meta = modelMeta(model.id),
-                        architecture = if (isLoaded) {
-                            ModelArchitecture(
-                                inputModalities = buildList {
-                                    add("text")
-                                    if (engine.metrics.value.supportsVision) add("image")
-                                    if (engine.metrics.value.supportsVideo) add("video")
-                                    if (engine.metrics.value.supportsAudio) add("audio")
-                                },
-                            )
-                        } else {
-                            null
-                        },
-                    )
-                }
+            // Every installed model is always listed (llama.cpp contract, both
+            // modes). Pi's detectServerMode reads data[0], so an empty list
+            // crashes its provider registration into a bogus "unreachable".
+            val installed = installedModelList(
+                models = modelsProvider(),
+                loadedId = loadedId,
+                failedId = failedId,
+                contextTokens = GenerationParams().contextTokens,
+                metrics = engine.metrics.value,
+            )
+            val data = if (installed.isEmpty()) {
+                // Nothing reported installed — fall back to the resident model
+                // so the list is never empty while a model is actually loaded.
+                loadedId?.let { listOf(ModelInfo(id = it, created = now, meta = modelMeta(it))) }
+                    ?: emptyList()
             } else {
-                loadedId?.let {
-                    listOf(ModelInfo(id = it, created = now, meta = modelMeta(it)))
-                } ?: emptyList()
+                installed
             }
             call.respond(ModelListResponse(data = data))
         }

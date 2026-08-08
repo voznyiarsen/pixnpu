@@ -44,12 +44,17 @@ private const val MAX_PROMPT_CHARS = 32000
  *                        [DONE] terminator here)
  *  - GET  /props         default generation settings + model info; router mode
  *                        advertises `role: "router"` (llama.cpp style) and
- *                        accepts `?model=<id>` for a specific model
+ *                        accepts `?model=<id>` for a specific model; in
+ *                        single-model mode `?model=<id>` for a non-resident
+ *                        model answers 400 "model is not loaded" (llama.cpp
+ *                        semantics — Pi maps it to its unloaded state)
  *  - GET  /slots         slot state (exactly one shared slot)
- *  - GET  /models        router mode: every installed model + status
- *  - POST /models/load   router mode: load a model by id (async — responds 200
+ *  - GET  /models        every installed model + status (both modes — Pi's
+ *                        extension crashes on a 404/empty list, and its
+ *                        /llama UI offers load/unload in either mode)
+ *  - POST /models/load   load a model by id (async — responds 200
  *                        immediately, status shows up on GET /models)
- *  - POST /models/unload router mode: unload a model by id
+ *  - POST /models/unload unload a model by id
  *  - POST /tokenize      always 501: LiteRT-LM exposes no tokenizer
  *  - POST /detokenize    always 501: there is no detokenizer
  *
@@ -226,6 +231,32 @@ fun Route.llamaApiRoutes(
                 )
             }
         } else {
+            // Single-model /props honors ?model= (llama.cpp semantics): Pi's
+            // SingleModel polls /props?model=<id> and maps a 400 "model is not
+            // loaded" to its unloaded state. Without this check a request for
+            // a model that isn't resident would get the loaded model's props
+            // with a 200, and Pi would think that model is loaded.
+            val requested = call.request.queryParameters["model"]
+            if (requested != null && requested != modelId) {
+                if (modelsProvider().none { it.id == requested }) {
+                    return@get call.respond(
+                        HttpStatusCode.NotFound,
+                        LlamaError("model '$requested' is not found"),
+                    )
+                }
+                if (requested == loadingModelIdProvider()) {
+                    return@get call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        LlamaPropsErrorBody(LlamaPropsError(503, "model is loading")),
+                    )
+                }
+                return@get call.respond(
+                    HttpStatusCode.BadRequest,
+                    LlamaPropsErrorBody(
+                        LlamaPropsError(400, "model is not loaded", "invalid_request_error"),
+                    ),
+                )
+            }
             val template = ChatTemplates.forModel(modelId)
             call.respond(
                 LlamaProps(
@@ -268,51 +299,18 @@ fun Route.llamaApiRoutes(
         if (unauthorized(call)) {
             return@get authError(call)
         }
-        if (!routerModeProvider()) {
-            return@get call.respond(
-                HttpStatusCode.NotFound,
-                LlamaError("router mode is disabled — GET /v1/models lists the loaded model"),
-            )
-        }
-        val loadedId = modelIdProvider()
-        val metrics = engine.metrics.value
-        val failedId = loadFailureProvider()
+        // Available in both modes: Pi's built-in llama.cpp flow lists models
+        // even in single-model mode, and an empty 404 here surfaces as a bogus
+        // "Llama.cpp unreachable" in the extension.
         call.respond(
             ModelListResponse(
-                data = modelsProvider().map { model ->
-                    val isLoaded = model.id == loadedId
-                    ModelInfo(
-                        id = model.id,
-                        created = model.lastModified / 1000,
-                        aliases = listOf(model.id),
-                        // llama.cpp status contract: "loaded" / "unloaded" (Pi's
-                        // /llama UI shows "X is not loaded" and hides the load
-                        // action for any other value). failed marks the last load
-                        // attempt that failed — Pi's loadAndWait stops polling and
-                        // reports the failure instead of hanging forever.
-                        status = ModelStatus(
-                            value = if (isLoaded) "loaded" else "unloaded",
-                            failed = model.id == failedId,
-                        ),
-                        meta = if (isLoaded) {
-                            ModelMeta(nCtx = metrics.maxContextTokens.coerceAtLeast(1))
-                        } else {
-                            null
-                        },
-                        architecture = if (isLoaded) {
-                            ModelArchitecture(
-                                inputModalities = buildList {
-                                    add("text")
-                                    if (metrics.supportsVision) add("image")
-                                    if (metrics.supportsVideo) add("video")
-                                    if (metrics.supportsAudio) add("audio")
-                                },
-                            )
-                        } else {
-                            null
-                        },
-                    )
-                },
+                data = installedModelList(
+                    models = modelsProvider(),
+                    loadedId = modelIdProvider(),
+                    failedId = loadFailureProvider(),
+                    contextTokens = GenerationParams().contextTokens,
+                    metrics = engine.metrics.value,
+                ),
             ),
         )
     }
@@ -321,12 +319,9 @@ fun Route.llamaApiRoutes(
         if (unauthorized(call)) {
             return@post authError(call)
         }
-        if (!routerModeProvider()) {
-            return@post call.respond(
-                HttpStatusCode.NotFound,
-                LlamaError("router mode is disabled — load models in the app"),
-            )
-        }
+        // Available in both modes: Pi's single-model flow POSTs here when the
+        // user taps "Load" on an unloaded model. The router flag only controls
+        // on-demand chat loads (see handleChatCompletion), not this endpoint.
         val id = runCatching {
             call.receive<RouterModelRequest>().model
         }.getOrNull().orEmpty()
@@ -364,12 +359,6 @@ fun Route.llamaApiRoutes(
     post("/models/unload") {
         if (unauthorized(call)) {
             return@post authError(call)
-        }
-        if (!routerModeProvider()) {
-            return@post call.respond(
-                HttpStatusCode.NotFound,
-                LlamaError("router mode is disabled — unload models in the app"),
-            )
         }
         val id = runCatching {
             call.receive<RouterModelRequest>().model
