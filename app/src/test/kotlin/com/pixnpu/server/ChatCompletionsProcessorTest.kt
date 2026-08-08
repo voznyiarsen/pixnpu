@@ -83,6 +83,21 @@ class ChatCompletionsProcessorTest {
         assertTrue(e.message!!.contains("Unsupported role 'tool'"))
     }
 
+    @Test
+    fun `developer role maps to system prefix`() {
+        // Pi (and other modern OpenAI clients) send the `developer` role for
+        // system instructions; it must not 400 like the old guard did.
+        val contents = processor.buildContent(
+            request(
+                "developer" to "Be concise",
+                "user" to "Hello",
+            ),
+        )
+        assertEquals(2, contents.size)
+        assertEquals(Content.Text("System: Be concise"), contents[0])
+        assertEquals(Content.Text("User: Hello"), contents[1])
+    }
+
     // --- buildContent: content parts ---
 
     @Test

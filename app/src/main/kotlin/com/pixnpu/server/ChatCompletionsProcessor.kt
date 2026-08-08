@@ -104,11 +104,11 @@ class ChatCompletionsProcessor(private val context: Context) {
         val result = mutableListOf<Content>()
         for (message in request.messages) {
             val prefix = when (message.role) {
-                "system" -> rolePrefixSystem
+                "system", "developer" -> rolePrefixSystem
                 "user" -> rolePrefixUser
                 "assistant" -> rolePrefixAssistant
                 else -> throw ChatCompletionError.BadRequest(
-                    "Unsupported role '${message.role}' (expected system, user or assistant)",
+                    "Unsupported role '${message.role}' (expected system, developer, user or assistant)",
                 )
             }
             val content = message.content

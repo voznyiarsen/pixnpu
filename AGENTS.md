@@ -126,7 +126,8 @@ adb -s 56061FDCH008CK logcat | grep -E "litert|com.pixnpu"
   so the SDK POSTs to `/chat/completions` — with only the `/v1` mount that was a
   body-less 404. Everything else → OpenAI-style 404.
 - **Stateless per request**: the full `messages` array is flattened into one role-prefixed
-  prompt (`System:`/`User:`/`Assistant:`) and generated with `trackHistory=false`, so API
+  prompt (`System:`/`User:`/`Assistant:`; **`developer` role maps to `System:`** — Pi
+  sends it for system instructions) and generated with `trackHistory=false`, so API
   calls never read from or write to the app chat. `temperature`, `top_p`,
   `max_tokens`/`max_completion_tokens` map to `paramsOverride` in `engine.generate(...)`.
   `n` is accepted only as 1 (else 400, `param:"n"`); unknown params are ignored
